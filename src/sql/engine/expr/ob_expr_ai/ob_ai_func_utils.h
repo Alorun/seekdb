@@ -329,6 +329,13 @@ public:
                                  ObJsonObject *http_response,
                                  ObIJsonBase *&result);
   static int set_string_result(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &res, ObString &res_str);
+  static int parse_embedding_array(ObIAllocator &allocator, ObJsonNode *data,
+                                  const char *index_key, ObIJsonBase *&result);
+  static int validate_embeddings(ObIAllocator &allocator, ObIJsonBase *result, int64_t count, int64_t dimension);
+  static int validate_complete_config(ObIAllocator &allocator, ObJsonObject *config);
+  static int get_finite_number(ObIAllocator &allocator, ObIJsonBase *node, double &value);
+  static int sort_rerank_result(ObIAllocator &allocator, ObIJsonBase *response,
+                                int64_t count, ObJsonArray *&result);
   static bool is_provider_support_base64(const ObString &provider);
   static int decode_base64_embedding_array(const ObIJsonBase &embedding_jbase, ObIAllocator &allocator,
                                            const int64_t dimension, float *&vector);
