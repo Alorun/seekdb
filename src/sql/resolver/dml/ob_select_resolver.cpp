@@ -28,6 +28,7 @@
 #include "sql/engine/expr/ob_expr_regexp_context.h"
 #include "sql/engine/expr/ob_json_param_type.h"
 #include "sql/parser/ob_parser_utils.h"
+#include "sql/engine/basic/file_scan_utils.h"
 
 #include "sql/executor/ob_memory_tracker.h"
 namespace oceanbase
@@ -3104,7 +3105,29 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
     } else {
       new(into_item) ObSelectIntoItem();
       into_item->into_type_ = node->type_;
-      if (T_INTO_OUTFILE == node->type_) { // into outfile
+      if (T_INTO_OUTFILE == node->type_ && node->value_ == 1) {
+        file_sql::Descriptor desc;
+        OZ (file_sql::check_enabled(*session_info_));
+        OZ (file_sql::parse_copy(*node, desc));
+        if (OB_SUCC(ret)) {
+          for (int64_t i = 0; i < select_stmt->get_select_item_size(); ++i) {
+            const auto &item = select_stmt->get_select_item(i);
+            const ObString &name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+            file_sql::Column c;
+            c.name.assign(name.ptr(), name.length());
+            desc.columns.push_back(c);
+          }
+          std::string encoded = desc.encode();
+          OZ (ob_write_string(*allocator_, ObString(encoded.size(), encoded.data()), into_item->external_properties_));
+          into_item->outfile_name_.set_varchar(ObString(desc.path.size(), desc.path.data()));
+          // Store the path in statement-owned memory.
+          ObString path;
+          OZ (ob_write_string(*allocator_, ObString(desc.path.size(), desc.path.data()), path));
+          into_item->outfile_name_.set_varchar(path);
+          get_stmt()->get_query_ctx()->has_file_sql_ = true;
+          get_stmt()->get_query_ctx()->disable_udf_parallel_ = true;
+        }
+      } else if (T_INTO_OUTFILE == node->type_) { // into outfile
         if (is_in_set_query()) {
           ret = OB_INAPPROPRIATE_INTO;
         } else if (node->num_child_ == 3 && NULL != node->children_[1]

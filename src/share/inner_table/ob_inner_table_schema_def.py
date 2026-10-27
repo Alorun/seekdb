@@ -342,7 +342,16 @@ all_column_def = dict(
       ('sub_data_type', 'int', 'false', '0'),
       ('skip_index_attr', 'int', 'false', '0'),
       ('lob_chunk_size', 'int', 'false', 'OB_DEFAULT_LOB_CHUNK_SIZE'),
-      ('local_session_vars', 'longtext', 'true')
+      ('local_session_vars', 'longtext', 'true'),
+      ('ai_expr', 'longtext', 'true'),
+      ('ai_normalized_expr', 'longtext', 'true'),
+      ('ai_dependency_ids', 'varbinary:OB_MAX_VARBINARY_LENGTH', 'true'),
+      ('ai_max_retries', 'int', 'true', '0'),
+      ('ai_definition_version', 'int', 'true', '0'),
+      ('ai_state_column_id', 'int', 'true', '0'),
+      ('ai_request_column_id', 'int', 'true', '0'),
+      ('ai_result_spec_column_id', 'int', 'true', '0'),
+
   ]
   )
 
@@ -13823,6 +13832,25 @@ def_table_schema(
     FROM oceanbase.__all_ai_model_endpoint WHERE ENDPOINT_ID != -1;
   """.replace("\n", " ")
 )
+
+# AI column metadata follows the owning column's DDL transaction and lifetime.
+def_table_schema(
+  owner = 'seekdb',
+  table_name = '__all_ai_column',
+  table_id = '21665',
+  table_type = 'SYSTEM_VIEW',
+  rowkey_columns = [], normal_columns = [], gm_columns = [],
+  view_definition = """
+    SELECT table_id, column_id, column_name,
+           ai_expr AS original_expr, ai_normalized_expr AS normalized_expr,
+           ai_dependency_ids AS dependency_column_ids,
+           'async' AS sync_mode, ai_max_retries AS max_retries,
+           ai_definition_version AS definition_version,
+           ai_state_column_id AS state_column_id,
+           ai_request_column_id AS request_column_id,
+           ai_result_spec_column_id AS result_spec_column_id
+    FROM oceanbase.__all_column WHERE is_hidden = 0 AND ai_expr IS NOT NULL AND ai_expr != ''
+  """.replace('\n', ' '))
 
 def_table_schema(
   owner           = 'jingyu.cr',

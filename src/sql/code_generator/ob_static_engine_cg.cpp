@@ -95,6 +95,7 @@
 #include "sql/engine/pdml/static/ob_px_sstable_insert_op.h"
 #include "sql/engine/basic/ob_select_into_op.h"
 #include "sql/engine/basic/ob_function_table_op.h"
+#include "sql/engine/basic/file_scan_utils.h"
 #include "sql/engine/basic/ob_json_table_op.h"
 #include "sql/engine/dml/ob_table_insert_op.h"
 #include "sql/engine/basic/ob_stat_collector_op.h"
@@ -5461,6 +5462,19 @@ int ObStaticEngineCG::generate_spec(ObLogSelectInto &op, ObSelectIntoSpec &spec,
   } else if (OB_FAIL(spec.user_vars_.init(op.get_user_vars().count()))) {
   } else if (OB_FAIL(spec.select_exprs_.init(op.get_select_exprs().count()))) {
   } else {
+    if (spec.external_properties_.str_.prefix_match("[\"seekdb_file_sql_v1\",")) {
+      file_sql::Descriptor desc;
+      OZ (desc.decode(spec.external_properties_.str_));
+      desc.columns.clear();
+      const ObSelectStmt *statement = static_cast<const ObSelectStmt *>(op.get_stmt());
+      for (int64_t i = 0; OB_SUCC(ret) && i < statement->get_select_item_size(); ++i) {
+        const auto &item = statement->get_select_item(i);
+        const ObString &name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+        file_sql::Column c; c.name.assign(name.ptr(), name.length()); desc.columns.push_back(c);
+      }
+      std::string encoded = desc.encode();
+      OZ (spec.external_properties_.store_str(ObString(encoded.size(), encoded.data())));
+    }
     ObString var;
     for (int64_t i = 0; OB_SUCC(ret) && i < op.get_user_vars().count(); ++i) {
       var.reset();
@@ -5511,6 +5525,10 @@ int ObStaticEngineCG::generate_spec(ObLogFunctionTable &op, ObFunctionTableSpec 
   } else {
     spec.has_correlated_expr_ = value_raw_expr->has_flag(CNT_DYNAMIC_PARAM);
     spec.value_expr_ = value_expr;
+    if (const ObString *encoded = file_sql::descriptor_expr(value_raw_expr)) {
+      OZ (ob_write_string(alloc, *encoded, spec.file_sql_desc_));
+      OZ (spec.file_column_ids_.init(op.get_stmt()->get_column_size()));
+    }
     for (int64_t i = 0; OB_SUCC(ret) && i < op.get_output_exprs().count(); ++i) {
       if (OB_FAIL(mark_expr_self_produced(op.get_output_exprs().at(i)))) {
       }
@@ -5526,6 +5544,7 @@ int ObStaticEngineCG::generate_spec(ObLogFunctionTable &op, ObFunctionTableSpec 
         OZ (mark_expr_self_produced(col_item->expr_));
         OZ (generate_rt_expr(*col_item->expr_, rt_expr));
         OZ (spec.column_exprs_.push_back(rt_expr));
+        if (!spec.file_sql_desc_.empty()) OZ (spec.file_column_ids_.push_back(col_item->column_id_ - OB_APP_MIN_COLUMN_ID));
       }
     }
   }
@@ -6459,6 +6478,11 @@ int ObStaticEngineCG::check_op_vectorization(ObLogicalOperator *op, ObSqlSchemaG
 {
   int ret = OB_SUCCESS;
   disable_vectorize = false;
+  if (op->get_type() == log_op_def::LOG_FUNCTION_TABLE
+      && nullptr == file_sql::descriptor_expr(static_cast<ObLogFunctionTable *>(op)->get_value_expr())) {
+    disable_vectorize = true;
+    return ret;
+  }
   if (log_op_def::LOG_TABLE_SCAN == op->get_type()) {
     // FIXME: bin.lb: disable vectorization for virtual table and virtual column.
     ObLogTableScan *tsc = static_cast<ObLogTableScan *>(op);

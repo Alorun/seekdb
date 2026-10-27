@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "sql/engine/basic/file_scan_utils.h"
+
 #define USING_LOG_PREFIX SQL_RESV
 
 #include "config_bridge.h"
@@ -121,6 +123,16 @@ int ObResolverUtils::get_all_function_table_column_names(const TableItem &table_
                                                          ObIArray<ObString> &column_names)
 {
   int ret = OB_SUCCESS;
+  if (const ObString *encoded = file_sql::descriptor_expr(table_item.function_table_expr_)) {
+    file_sql::Descriptor desc;
+    OZ (desc.decode(*encoded));
+    for (const auto &c : desc.columns) {
+      ObString name;
+      OZ (ob_write_string(*params.allocator_, ObString(c.name.size(), c.name.data()), name));
+      OZ (column_names.push_back(name));
+    }
+    return ret;
+  }
   ObRawExpr *table_expr = NULL;
   ObPLPackageGuard *package_guard = nullptr;
   const ObUserDefinedType *user_type = NULL;

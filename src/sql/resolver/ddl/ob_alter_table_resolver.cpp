@@ -3426,6 +3426,12 @@ int ObAlterTableResolver::resolve_add_column(const ParseNode &node, ObColumnName
         } else if (OB_FAIL(set_column_collation(alter_column_schema))) {
         }
 
+        if (OB_SUCC(ret) && alter_column_schema.is_ai_column()) {
+          ObTableSchema binding_table;
+          if (OB_FAIL(binding_table.assign(*table_schema_))) {
+          } else { ret = resolve_ai_column_expr(params_, binding_table, alter_column_schema); }
+        }
+
         //do some check
         if (OB_SUCC(ret)) {
           // resolve index (unique key only) of column
@@ -3531,6 +3537,16 @@ int ObAlterTableResolver::resolve_alter_table_column_definition(AlterColumnSchem
               allow_has_default))) {
   } else { // add column level constraint
     add_or_modify_check_cst_times_ += alter_table_schema.get_constraint_count() - cst_cnt;
+  }
+  if (OB_SUCC(ret) && column.alter_type_ != OB_DDL_ADD_COLUMN) {
+    const ObString &old_name = column.get_origin_column_name().empty()
+        ? column.get_column_name_str() : column.get_origin_column_name();
+    const ObColumnSchemaV2 *old_column = table_schema_->get_column_schema(old_name);
+    if (old_column != nullptr && OB_FAIL(check_ai_column_dependency(*table_schema_, old_column->get_column_id()))) {
+    } else if (column.is_ai_column() || (old_column != nullptr && old_column->is_ai_column())) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "MODIFY/CHANGE AI COLUMN before definition-change invalidation is available");
+    }
   }
   // else if (OB_FAIL(process_default_value(stat, column))) {
   //   SQL_RESV_LOG(WARN, "failed to set default value", K(ret));
@@ -4352,6 +4368,7 @@ int ObAlterTableResolver::resolve_rename_column(const ParseNode &node)
                        table_schema_->get_table_name_str().ptr());
       }
       SQL_RESV_LOG(WARN, "fail to get origin column schema", K(ret));
+    } else if (OB_FAIL(check_ai_column_dependency(*table_schema_, origin_col_schema->get_column_id()))) {
     } else if (OB_FAIL(alter_column_schema.assign(*origin_col_schema))) {
     } else if (OB_FAIL(alter_column_schema.set_origin_column_name(origin_column_name))) {
     } else if (OB_FAIL(alter_column_schema.set_column_name(new_column_name))) {

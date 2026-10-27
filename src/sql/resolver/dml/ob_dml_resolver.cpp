@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "sql/engine/basic/file_scan_utils.h"
+
 #define USING_LOG_PREFIX SQL_RESV
 #include "config_bridge.h"
 #include "ob_dml_resolver.h"
@@ -3923,6 +3925,50 @@ int ObDMLResolver::resolve_json_table_item(const ParseNode &parse_tree, TableIte
   return ret;
 }
 
+int ObDMLResolver::resolve_file_table_item(const ParseNode &node, TableItem *&table)
+{
+  int ret = OB_SUCCESS;
+  file_sql::Descriptor desc;
+  ObConstRawExpr *value = nullptr;
+  ObString encoded;
+  TableItem *item = nullptr;
+  if (OB_FAIL(file_sql::check_enabled(*session_info_))) {
+  } else if (OB_FAIL(file_sql::parse_options(node, desc.options, desc.path))) {
+  } else if (OB_FAIL(file_sql::infer(*session_info_, desc, session_info_->get_cur_exec_ctx()))) {
+  } else {
+    std::string serialized = desc.encode();
+    OZ (ob_write_string(*allocator_, ObString(serialized.size(), serialized.data()), encoded));
+    OZ (params_.expr_factory_->create_raw_expr(T_VARCHAR, value));
+    if (OB_SUCC(ret)) {
+      ObObj obj;
+      obj.set_varchar(encoded);
+      obj.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+      value->set_value(obj);
+
+      item = get_stmt()->create_table_item(*allocator_);
+      if (nullptr == item) ret = OB_ALLOCATE_MEMORY_FAILED;
+    }
+    if (OB_SUCC(ret)) {
+      item->type_ = TableItem::FUNCTION_TABLE;
+      item->table_id_ = generate_table_id();
+      item->function_table_expr_ = value;
+      if (node.children_[1]) {
+        OZ (ob_write_string(*allocator_, ObString(node.children_[1]->str_len_, node.children_[1]->str_value_), item->alias_name_));
+      } else {
+        OZ (get_stmt()->generate_func_table_name(*allocator_, item->alias_name_));
+      }
+      item->table_name_ = item->alias_name_;
+      OZ (get_stmt()->add_table_item(session_info_, item));
+      get_stmt()->get_query_ctx()->has_file_sql_ = true;
+      get_stmt()->get_query_ctx()->disable_udf_parallel_ = true;
+      ObSEArray<ColumnItem, 16> columns;
+      OZ (resolve_function_table_column_item(*item, columns));
+      table = item;
+    }
+  }
+  return ret;
+}
+
 int ObDMLResolver::resolve_function_table_item(const ParseNode &parse_tree,
                                                TableItem *&tbl_item)
 {
@@ -3932,6 +3978,9 @@ int ObDMLResolver::resolve_function_table_item(const ParseNode &parse_tree,
   ObRawExpr *function_table_expr = NULL;
   TableItem *item = NULL;
   ObString alias_name;
+  if (parse_tree.value_ >= 1 && parse_tree.value_ <= 4) {
+    return resolve_file_table_item(parse_tree, tbl_item);
+  }
   CK (OB_LIKELY(T_TABLE_COLLECTION_EXPRESSION == parse_tree.type_));
   CK (OB_LIKELY(2 == parse_tree.num_child_));
   CK (OB_NOT_NULL(parse_tree.children_[0]));
@@ -3943,6 +3992,9 @@ int ObDMLResolver::resolve_function_table_item(const ParseNode &parse_tree,
     OZ (resolve_sql_expr(*(parse_tree.children_[0]), function_table_expr));
     OX (params_.is_resolve_table_function_expr_ = false);
     CK (OB_NOT_NULL(function_table_expr));
+    if (OB_SUCC(ret) && file_sql::descriptor_expr(function_table_expr)) {
+      ret = file_sql::error("internal file metadata cannot be supplied as a TABLE argument");
+    }
     OX (alias_node = parse_tree.children_[1]);
   }
   CK (OB_NOT_NULL(function_table_expr));
@@ -7475,7 +7527,28 @@ int ObDMLResolver::resolve_function_table_column_item(const TableItem &table_ite
   CK (OB_LIKELY(table_item.is_function_table()));
   CK (OB_NOT_NULL(table_item.function_table_expr_));
   if (OB_SUCC(ret)) {
-    if (table_item.function_table_expr_->get_result_type().is_ext()) {
+    if (const ObString *encoded = file_sql::descriptor_expr(table_item.function_table_expr_)) {
+      file_sql::Descriptor desc;
+      OZ (desc.decode(*encoded));
+      for (size_t i = 0; OB_SUCC(ret) && i < desc.columns.size(); ++i) {
+        const auto &c = desc.columns[i];
+        ObString name;
+        OZ (ob_write_string(*allocator_, ObString(c.name.size(), c.name.data()), name));
+        ColumnItem *column = get_stmt()->get_column_item(table_item.table_id_, name);
+        if (OB_SUCC(ret) && nullptr == column) {
+          ObObjMeta meta;
+          meta.set_type(file_sql::obj_type(c.type));
+          meta.set_collation_type(c.type == file_sql::Type::STRING ? CS_TYPE_UTF8MB4_BIN : CS_TYPE_BINARY);
+          meta.set_collation_level(c.type == file_sql::Type::STRING ? CS_LEVEL_IMPLICIT : CS_LEVEL_NUMERIC);
+          ObAccuracy accuracy;
+          if (c.type == file_sql::Type::STRING) accuracy.set_length(file_sql::MAX_RECORD);
+          if (c.type == file_sql::Type::DATETIME) accuracy.set_scale(c.scale);
+          OZ (resolve_function_table_column_item(table_item, meta, accuracy, name, OB_APP_MIN_COLUMN_ID + i, column));
+          if (OB_SUCC(ret) && !c.nullable) column->expr_->set_result_flag(NOT_NULL_FLAG);
+        }
+        if (OB_SUCC(ret)) OZ (col_items.push_back(*column));
+      }
+    } else if (table_item.function_table_expr_->get_result_type().is_ext()) {
       ret = resolve_function_table_column_item_udf(table_item, col_items);
     } else {
       ret = resolve_function_table_column_item_sys_func(table_item, col_items);

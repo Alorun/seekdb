@@ -16,6 +16,8 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/ob_resolver.h"
+#include "sql/parser/ob_parser.h"
+#include "sql/engine/basic/file_scan_utils.h"
 #include "lib/utility/ob_smart_call.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "sql/resolver/cmd/ob_alter_system_resolver.h"
@@ -133,6 +135,60 @@ int ObResolver::select_stmt_resolver_func(ObResolverParams &params, const ParseN
     if (OB_FAIL(SMART_CALL(stmt_resolver.resolve(parse_tree)))) {
     }
     stmt = stmt_resolver.get_basic_stmt();
+  }
+  return ret;
+}
+
+static bool contains_file_source(const ParseNode *node, int depth = 0)
+{
+  if (node == nullptr || depth > 256) return false;
+  if (node->type_ == T_TABLE_COLLECTION_EXPRESSION && node->value_ >= 1 && node->value_ <= 4) return true;
+  for (int i = 0; i < node->num_child_; ++i) if (contains_file_source(node->children_[i], depth + 1)) return true;
+  return false;
+}
+
+// DESCRIBE binds the original SELECT, then exposes its bounded metadata through
+// a native constant SELECT. It never reads or substitutes file result rows.
+static int describe_file_select(ObResolverParams &params, const ParseNode &node, ObStmt *&stmt)
+{
+  int ret = OB_SUCCESS;
+  ObSelectResolver child(params);
+  OZ (child.resolve(*node.children_[4]));
+  ObSelectStmt *source = child.get_select_stmt();
+  std::string sql;
+  auto literal = [](const ObString &s) {
+    static const char hex[] = "0123456789abcdef";
+    std::string out = "cast(0x";
+    for (int64_t i = 0; i < s.length(); ++i) {
+      const unsigned char c = s.ptr()[i]; out += hex[c >> 4]; out += hex[c & 15];
+    }
+    return out + " as char character set utf8mb4)";
+  };
+  for (int64_t i = 0; OB_SUCC(ret) && i < source->get_select_item_size(); ++i) {
+    const SelectItem &item = source->get_select_item(i);
+    const ObString &name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+    const char *type = "VARCHAR";
+    switch (item.expr_->get_data_type()) {
+      case ObIntType: type = "BIGINT"; break;
+      case ObTinyIntType: type = "BOOLEAN"; break;
+      case ObDoubleType: type = "DOUBLE"; break;
+      case ObDateType: type = "DATE"; break;
+      case ObDateTimeType: type = "DATETIME"; break;
+      default: break;
+    }
+    if (i) sql += " union all ";
+    sql += "select " + literal(name) + " as column_name, '" + type + "' as column_type, '";
+    sql += (item.expr_->get_result_type().get_result_flag() & NOT_NULL_FLAG) ? "NO" : "YES";
+    sql += "' as `null`, NULL as `key`, NULL as `default`, NULL as extra";
+  }
+  if (OB_SUCC(ret)) {
+    ParseResult parsed;
+    ObParser parser(*params.allocator_, params.session_info_->get_sql_mode());
+    OZ (parser.parse(ObString(sql.size(), sql.data()), parsed));
+    if (OB_SUCC(ret)) {
+      ObResolver resolver(params);
+      OZ (resolver.resolve(ObResolver::IS_NOT_PREPARED_STMT, *parsed.result_tree_->children_[0], stmt));
+    }
   }
   return ret;
 }
@@ -473,7 +529,11 @@ int ObResolver::resolve(IsPrepared if_prepared, const ParseNode &parse_tree, ObS
         break;
       }
       case T_EXPLAIN: {
-        REGISTER_STMT_RESOLVER(Explain);
+        if (parse_tree.is_tree_not_param_ && contains_file_source(parse_tree.children_[4])) {
+          ret = describe_file_select(params_, parse_tree, stmt);
+        } else {
+          REGISTER_STMT_RESOLVER(Explain);
+        }
         break;
       }
       case T_ALTER_SYSTEM_SET: {

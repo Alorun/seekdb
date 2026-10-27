@@ -20,6 +20,8 @@
 #include <memory>
 
 #include "ob_select_into_op.h"
+#include "sql/engine/basic/file_scan_utils.h"
+#include "sql/engine/expr/ob_expr_lob_utils.h"
 #include "sql/engine/cmd/ob_variable_set_executor.h"
 #include "lib/charset/ob_charset_string_helper.h"
 #include "sql/engine/px/ob_px_sqc_handler.h"
@@ -53,6 +55,17 @@ int ObSelectIntoOp::inner_open()
     if (OB_FAIL(session->get_sql_select_limit(top_limit_cnt_))) {
     }
   }
+  if (OB_SUCC(ret) && MY_SPEC.external_properties_.str_.prefix_match("[\"seekdb_file_sql_v1\",")) {
+    file_sql::Descriptor desc;
+    OZ (desc.decode(MY_SPEC.external_properties_.str_));
+    void *memory = ctx_.get_allocator().alloc(sizeof(file_sql::CsvExport));
+    if (nullptr == memory) ret = OB_ALLOCATE_MEMORY_FAILED;
+    else {
+      file_copy_ = new (memory) file_sql::CsvExport();
+      OZ (file_copy_->open(*session, desc));
+    }
+    return ret;
+  }
   if (OB_SUCC(ret) && !MY_SPEC.external_properties_.str_.empty()) {
     if (OB_FAIL(external_properties_.load_from_string(MY_SPEC.external_properties_.str_,
                                                       ctx_.get_allocator()))) {
@@ -76,6 +89,71 @@ int ObSelectIntoOp::inner_open()
       }
     }
   }
+  return ret;
+}
+
+int ObSelectIntoOp::copy_file_rows()
+{
+  if (file_copy_done_) return OB_ITER_END;
+  int ret = OB_SUCCESS;
+  int64_t count = 0;
+  ObObjPrintParams print;
+  print.tz_info_ = ctx_.get_my_session()->get_timezone_info();
+  while (OB_SUCC(ret)) {
+    clear_evaluated_flag();
+    OZ (ctx_.check_status());
+    if (OB_SUCC(ret) && OB_FAIL(child_->get_next_row())) break;
+    std::vector<file_sql::Cell> row;
+    size_t row_bytes = 0;
+    ObArenaAllocator lob_allocator("FileSqlCopy", OB_MALLOC_NORMAL_BLOCK_SIZE);
+    for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.select_exprs_.count(); ++i) {
+      ObExpr *expr = MY_SPEC.select_exprs_.at(i);
+      ObDatum *datum = nullptr;
+      ObObj obj;
+      OZ (expr->eval(eval_ctx_, datum));
+      if (OB_SUCC(ret)) OZ (datum->to_obj(obj, expr->obj_meta_));
+      file_sql::Cell cell;
+      if (OB_SUCC(ret)) {
+        cell.is_null = obj.is_null();
+        if (!cell.is_null) {
+          if (obj.is_lob_storage()) {
+            ObLobLocatorV2 locator(obj.get_string(), obj.has_lob_header());
+            int64_t length = 0;
+            OZ (locator.get_lob_data_byte_len(length));
+            if (OB_SUCC(ret) && (length < 0 || length > file_sql::MAX_RECORD - row_bytes)) ret = file_sql::error("COPY record exceeds 8 MiB");
+            ObString value;
+            OZ (ObTextStringHelper::read_real_string_data(ctx_, &lob_allocator, obj, value));
+            if (OB_SUCC(ret)) cell.text.assign(value.ptr(), value.length());
+          } else if (obj.is_string_type()) {
+            if (obj.get_string_len() > file_sql::MAX_RECORD - row_bytes) ret = file_sql::error("COPY record exceeds 8 MiB");
+            else cell.text.assign(obj.get_string_ptr(), obj.get_string_len());
+          }
+          else {
+            char buffer[1024]; int64_t pos = 0;
+            OZ (obj.print_plain_str_literal(buffer, sizeof(buffer), pos, print));
+            if (OB_SUCC(ret)) cell.text.assign(buffer, pos);
+          }
+        }
+        if (OB_SUCC(ret) && cell.text.size() > file_sql::MAX_RECORD - row_bytes) ret = file_sql::error("COPY record exceeds 8 MiB");
+        if (OB_SUCC(ret)) {
+          row_bytes += cell.text.size();
+          row.push_back(std::move(cell));
+        }
+      }
+    }
+    OZ (file_copy_->row(row));
+    if (OB_SUCC(ret)) ++count;
+  }
+  if (ret == OB_ITER_END) {
+    ret = child_->close();
+    if (ret == OB_SUCCESS) ret = file_copy_->finish(&ctx_);
+    else file_copy_->abort();
+    if (ret == OB_SUCCESS) {
+      ctx_.get_physical_plan_ctx()->set_affected_rows(count);
+      file_copy_done_ = true;
+      ret = OB_ITER_END;
+    }
+  } else file_copy_->abort();
   return ret;
 }
 
@@ -188,6 +266,7 @@ int ObSelectIntoOp::calc_outfile_path()
 }
 int ObSelectIntoOp::inner_get_next_row()
 {
+  if (file_copy_) return copy_file_rows();
   int ret = 0 == top_limit_cnt_ ? OB_ITER_END : OB_SUCCESS;
   int64_t row_count = 0;
   const ObItemType into_type = MY_SPEC.into_type_;
@@ -236,6 +315,11 @@ int ObSelectIntoOp::inner_get_next_row()
 
 int ObSelectIntoOp::inner_get_next_batch(const int64_t max_row_cnt)
 {
+  if (file_copy_) {
+    int ret = copy_file_rows();
+    brs_.size_ = 0; brs_.end_ = true;
+    return ret == OB_ITER_END ? OB_SUCCESS : ret;
+  }
   int ret = OB_SUCCESS;
   const ObBatchRows *child_brs = NULL;
   int64_t batch_size = min(max_row_cnt, MY_SPEC.max_batch_size_);
@@ -324,6 +408,7 @@ int ObSelectIntoOp::inner_rescan()
 
 int ObSelectIntoOp::inner_close()
 {
+  if (file_copy_) file_copy_->abort();
   int ret = OB_SUCCESS;
   if (OB_NOT_NULL(data_writer_) && OB_FAIL(data_writer_->close_data_writer())) {
   }
@@ -1275,6 +1360,7 @@ int ObSelectIntoOp::new_data_writer(ObExternalFileWriter *&data_writer)
 
 void ObSelectIntoOp::destroy()
 {
+  if (file_copy_) { file_copy_->~CsvExport(); file_copy_ = nullptr; }
   if (OB_NOT_NULL(data_writer_)) {
     data_writer_->~ObExternalFileWriter();
   }

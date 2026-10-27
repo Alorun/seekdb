@@ -951,6 +951,17 @@ int ObCreateTableResolver::resolve_table_elements(const ParseNode *node,
       }
     }
   }
+  if (OB_SUCC(ret) && resolve_rule != RESOLVE_NON_COL) {
+    ObTableSchema &table = static_cast<ObCreateTableStmt *>(stmt_)->get_create_table_arg().schema_;
+    const int64_t user_column_count = table.get_column_count();
+    for (int64_t i = 0; OB_SUCC(ret) && i < user_column_count; ++i) {
+      ObColumnSchemaV2 *column = table.get_column_schema_by_idx(i);
+      if (column->is_ai_column()) {
+        if (OB_FAIL(resolve_ai_column_expr(params_, table, *column))) {
+        } else { ret = add_ai_column_hidden_columns(table, *column); }
+      }
+    }
+  }
   return ret;
 }
 

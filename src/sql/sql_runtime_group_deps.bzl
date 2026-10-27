@@ -112,7 +112,9 @@ _SQL_RUNTIME_EXTRA_DEP_CONSUMERS = {
         'ob_sql_engine_expr_13',
         'ob_sql_engine_expr_15',
     ],
+    '@seekdb_3rd_headers//:rapidjson_headers': ['ob_sql_engine_basic_0'],
     '@seekdb_3rd_headers//:fast_float_headers': [
+        'ob_sql_engine_basic_0',
         'ob_sql_engine_expr_1',
     ],
     '@seekdb_3rd_headers//:icu_headers': [

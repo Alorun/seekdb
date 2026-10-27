@@ -1,0 +1,15 @@
+[package]
+name = "file-sql"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[lib]
+name = "file_sql"
+crate-type = ["staticlib", "rlib"]
+[dependencies]
+parquet = { version = "=56.2.1", default-features = false, features = ["arrow", "snap", "flate2-zlib-rs", "zstd", "lz4"] }
+arrow-array = "=56.2.1"
+arrow-schema = "=56.2.1"
+arrow-cast = "=56.2.1"
+bytes = "1"
+thrift = "0.17"
