@@ -1,5 +1,7 @@
 // Copyright (c) 2026 OceanBase. Licensed under the Apache License, Version 2.0.
 //! Format decoding only. SQL binding, expressions and joins remain in seekdb.
+#[cfg(all(target_os = "linux", panic = "abort"))]
+compile_error!("File SQL requires guarded panic=unwind; build with rust/build.py");
 #[cfg(target_os = "linux")]
 mod linux {
     use arrow_array::{Array, RecordBatch};
@@ -22,6 +24,12 @@ mod linux {
     const MAX_PAGE: i32 = 16 << 20;
     const MAX_GROUP: i64 = 64 << 20;
     type Result<T> = std::result::Result<T, String>;
+
+    fn guarded<T>(call: impl FnOnce() -> Result<T>) -> Result<T> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).unwrap_or_else(|_| {
+            Err("Parquet decoder rejected corrupt data (panic contained)".into())
+        })
+    }
 
     // Bound Thrift lengths/depth before handing metadata to the library. In
     // particular, a corrupt list length must not trigger an enormous allocation.
@@ -155,6 +163,24 @@ mod linux {
             _ => return Err(format!("unsupported Parquet type: {t}")),
         })
     }
+    fn check_encoding(encoding: parquet::format::Encoding) -> Result<()> {
+        use parquet::format::Encoding as E;
+        // Delta byte-array decoders allocate from embedded counts before
+        // checking page counts. Reject them until those allocations are bounded.
+        if matches!(
+            encoding,
+            E::PLAIN
+                | E::PLAIN_DICTIONARY
+                | E::RLE
+                | E::RLE_DICTIONARY
+                | E::BIT_PACKED
+                | E::BYTE_STREAM_SPLIT
+        ) {
+            Ok(())
+        } else {
+            Err("unsupported Parquet encoding (delta encodings require bounded buffers)".into())
+        }
+    }
     struct Scan {
         file: File,
         names: Vec<CString>,
@@ -276,6 +302,16 @@ mod linux {
                     let mut protocol = TCompactInputProtocol::new(Cursor::new(&header[..n]));
                     let h = PageHeader::read_from_in_protocol(&mut protocol)
                         .map_err(|e| e.to_string())?;
+                    for encoding in [
+                        h.data_page_header.as_ref().map(|p| p.encoding),
+                        h.data_page_header_v2.as_ref().map(|p| p.encoding),
+                        h.dictionary_page_header.as_ref().map(|p| p.encoding),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        check_encoding(encoding)?;
+                    }
                     if h.compressed_page_size < 0
                         || h.compressed_page_size > MAX_PAGE
                         || h.uncompressed_page_size < 0
@@ -393,7 +429,7 @@ mod linux {
             }
             Ok(())
         };
-        match open_file(File::from_raw_fd(fd), &check) {
+        match guarded(|| open_file(File::from_raw_fd(fd), &check)) {
             Ok(s) => Box::into_raw(Box::new(s)).cast(),
             Err(e) => {
                 message(error, cap, &e);
@@ -459,7 +495,7 @@ mod linux {
         cap: usize,
     ) -> i32 {
         let s = &mut *s.cast::<Scan>();
-        let result = (|| -> Result<()> {
+        let result = guarded(|| -> Result<()> {
             s.projection = if count == 0 {
                 Vec::new()
             } else {
@@ -479,8 +515,16 @@ mod linux {
             )
             .map_err(|e| e.to_string())?;
             let mask = ProjectionMask::leaves(b.parquet_schema(), s.projection.clone());
+            // A tiny dictionary can expand to huge repeated strings. Decode
+            // string projections one row at a time; the native scanner still
+            // batches rows under its byte limit. Fixed-width/count scans use 128.
+            let batch_size = if s.projection.iter().any(|i| s.kinds[*i] == 4) {
+                1
+            } else {
+                128
+            };
             s.reader = Some(
-                b.with_batch_size(128)
+                b.with_batch_size(batch_size)
                     .with_projection(mask)
                     .build()
                     .map_err(|e| e.to_string())?,
@@ -488,7 +532,7 @@ mod linux {
             s.batch = None;
             s.row = 0;
             Ok(())
-        })();
+        });
         match result {
             Ok(()) => 0,
             Err(e) => {
@@ -508,28 +552,34 @@ mod linux {
         cap: usize,
     ) -> i32 {
         let s = &mut *s.cast::<Scan>();
-        if s.batch.as_ref().is_some_and(|b| s.row + 1 < b.num_rows()) {
-            s.row += 1;
-            return 0;
-        }
-        loop {
-            match s.reader.as_mut().and_then(Iterator::next) {
-                Some(Ok(b)) => {
-                    if b.num_rows() == 0 {
-                        continue;
+        let result = guarded(|| {
+            if s.batch.as_ref().is_some_and(|b| s.row + 1 < b.num_rows()) {
+                s.row += 1;
+                return Ok(0);
+            }
+            loop {
+                match s.reader.as_mut().and_then(Iterator::next) {
+                    Some(Ok(b)) => {
+                        if b.num_rows() == 0 {
+                            continue;
+                        }
+                        s.batch = Some(b);
+                        s.row = 0;
+                        return Ok(0);
                     }
-                    s.batch = Some(b);
-                    s.row = 0;
-                    return 0;
+                    Some(Err(e)) => return Err(e.to_string()),
+                    None => {
+                        s.batch = None;
+                        return Ok(1);
+                    }
                 }
-                Some(Err(e)) => {
-                    message(error, cap, &e.to_string());
-                    return -1;
-                }
-                None => {
-                    s.batch = None;
-                    return 1;
-                }
+            }
+        });
+        match result {
+            Ok(status) => status,
+            Err(e) => {
+                message(error, cap, &e);
+                -1
             }
         }
     }
@@ -546,7 +596,7 @@ mod linux {
         cap: usize,
     ) -> *const c_char {
         let s = &mut *s.cast::<Scan>();
-        let result = (|| -> Result<Option<CString>> {
+        let result = guarded(|| -> Result<Option<CString>> {
             let Some(projected) = s.projection.iter().position(|i| *i == column) else {
                 return Ok(None);
             };
@@ -577,7 +627,7 @@ mod linux {
                 return Err("Parquet field exceeds 8 MiB".into());
             }
             Ok(Some(CString::new(text).map_err(|_| "NUL in Parquet text")?))
-        })();
+        });
         match result {
             Ok(None) => {
                 *is_null = true;
@@ -686,6 +736,10 @@ mod linux {
                 );
                 let mut strings = Vec::new();
                 while seekdb_parquet_next(handle, error.as_mut_ptr(), 512) == 0 {
+                    assert_eq!(
+                        (*handle.cast::<Scan>()).batch.as_ref().unwrap().num_rows(),
+                        1
+                    );
                     let mut null = false;
                     let value = seekdb_parquet_cell(handle, 1, &mut null, error.as_mut_ptr(), 512);
                     strings.push(if null {
@@ -709,6 +763,35 @@ mod linux {
             // A coordinated footer row-count change must also fail COUNT(*) with
             // an empty projection; column data-page counts are independent evidence.
             let original = std::fs::read(&path).unwrap();
+            // This invalid level length used to panic in Bytes::slice. Exercise
+            // the actual C boundary, which must return an error and stay alive.
+            let mut damaged = original.clone();
+            damaged[47] ^= 255;
+            std::fs::write(&path, damaged).unwrap();
+            unsafe {
+                use std::os::fd::IntoRawFd;
+                let handle = seekdb_parquet_open(
+                    File::open(&path).unwrap().into_raw_fd(),
+                    None,
+                    ptr::null_mut(),
+                    error.as_mut_ptr(),
+                    error.len(),
+                );
+                assert!(!handle.is_null());
+                let projection = [0i64, 1];
+                let mut status = seekdb_parquet_start(
+                    handle,
+                    projection.as_ptr(),
+                    projection.len(),
+                    error.as_mut_ptr(),
+                    error.len(),
+                );
+                while status == 0 {
+                    status = seekdb_parquet_next(handle, error.as_mut_ptr(), error.len());
+                }
+                assert_eq!(status, -1);
+                seekdb_parquet_close(handle);
+            }
             let len = u32::from_le_bytes(
                 original[original.len() - 8..original.len() - 4]
                     .try_into()
@@ -762,6 +845,8 @@ mod linux {
             assert!(validate(&[0x18, 0xff, 0xff, 0xff, 0xff, 0x07]).is_err());
             assert!(validate(&[0x1c, 0x1c]).is_err());
             assert_eq!(validate(&[0]).unwrap(), 1);
+            assert!(check_encoding(parquet::format::Encoding::DELTA_BYTE_ARRAY).is_err());
+            assert!(check_encoding(parquet::format::Encoding::DELTA_LENGTH_BYTE_ARRAY).is_err());
         }
     }
 }

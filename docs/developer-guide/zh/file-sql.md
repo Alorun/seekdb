@@ -2,7 +2,7 @@
 
 ## 源码盘点（2026-10-26）
 
-初始分支 `the-file-is-database`，工作区干净。2026-10-27 继续时当前分支为 `async-ai-column`；保留该分支和已有工作区，按当前测试宏补齐 File SQL 的 CMake/Bazel 测试入口，未恢复已移除的 AI 测试。公开 mysqltest、数据和部署/清理 include 已存在；`unittest/sql/parser/test_file_sql_parser.cpp`、`unittest/sql/engine/basic/test_file_scan_utils.cpp` 原先不存在。原始源码没有 read_*、glob、COPY 或 enable_file_sql 实现。
+初始分支 `the-file-is-database`，工作区干净。2026-10-27 继续时当前分支为 `async-ai-column`；保留该分支和已有工作区，按当前测试宏补齐 File SQL 的 CMake/Bazel 测试入口。工作期间检测到外部提交 `452be98ed`，其包含此前工作区的 File SQL 实现；保留该提交，继续修复，没有由本任务执行提交或推送。公开 mysqltest、数据和部署/清理 include 已存在；`unittest/sql/parser/test_file_sql_parser.cpp`、`unittest/sql/engine/basic/test_file_scan_utils.cpp` 原先不存在。初始源码没有 read_*、glob、COPY 或 enable_file_sql 实现。
 
 已有机制及本次接入点：
 
@@ -53,7 +53,9 @@ CSV 默认有表头，分隔符逗号，引号和转义均为双引号，NULL �
 
 资源上限：列 1024，列名 256 字节，单记录/字段 8 MiB，Schema 编码 1 MiB，读取缓冲 64 KiB，每批最多 128 行且约 8 MiB；Parquet Footer 8 MiB，Row Group 4096 个，页压缩/解压 16 MiB，单 Row Group 压缩总量、解码总量各 64 MiB，每组最多 65,536 页，每页值数 100 万。受限 STL/Rust 缓冲尚未全部纳入 seekdb 租户内存统计。取消检查在推断每条记录和扫描批次运行；Parquet 页头预检每 128 页及每个 Row Group 检查原生查询状态；单页解码期间仍以页/批次为取消边界。
 
-Parquet 支持平面 BOOLEAN、有符号整数及至 UINT32、FLOAT/DOUBLE、UTF8、DATE32、无时区秒/毫秒/微秒 TIMESTAMP。拒绝嵌套、UINT64、DECIMAL、INT96 等未绑定类型；使用 Apache Parquet 支持的编码及 Snappy、gzip、zstd、lz4。先检查 Footer、每页长度/复杂度及数据页计数与 Footer 行数的一致性，再调用格式库；零投影 COUNT(*) 同样核验页计数，不整文件解压。
+Parquet 支持平面 BOOLEAN、有符号整数及至 UINT32、FLOAT/DOUBLE、UTF8、DATE32、无时区秒/毫秒/微秒 TIMESTAMP。拒绝嵌套、UINT64、DECIMAL、INT96 等未绑定类型；允许 PLAIN、PLAIN_DICTIONARY、RLE、RLE_DICTIONARY、BIT_PACKED、BYTE_STREAM_SPLIT，压缩启用 Snappy、gzip、zstd、lz4。当前明确拒绝 Delta 系列编码：库中 Delta 字符串解码器会在检查页值数之前依据页内计数分配数组，仍需受限解码支持。先检查 Footer、每页长度/复杂度及数据页计数与 Footer 行数的一致性，再调用格式库；零投影 COUNT(*) 同样核验页计数，不整文件解压。含字符串投影时 Arrow 每次解码一行，防止字典长值重复展开成大数组；固定宽度和空投影为 128 行，seekdb 扫描器继续按行数和字节上限组批。
+
+坏页实测暴露了 Apache 解码路径的 panic。格式 FFI 的打开、初始化、批次读取及单元格转换均捕获 panic 并返回明确错误；不跨入 C++。由于 Rust 静态库共享 panic runtime，Release 与 cmake-debug 统一使用 unwind，File SQL 在内部捕获，其他 C ABI/cxx 入口仍在 panic 逃逸时终止，保持禁止 Rust panic 进入 C++ 的边界。File SQL 在 panic=abort 的 Linux 构建上有编译期拒绝，防止误链接不能捕获错误的解码库。一次对基础 Snappy 样本的 1,782 个逐字节翻转/截断检查发现原先 36 个进程异常退出，修复后为 0；这不是完整格式模糊测试或所有编码的安全证明。
 
 COPY 全部非 NULL 字段加引号并转义，NULL 文本不加引号。目标已存在（含链接）拒绝，临时文件在允许目录中使用 O_TMPFILE 匿名创建（当前要求文件系统支持），成功 fsync 和关闭写句柄后，通过固定 inode 的只读句柄发布；`linkat` 原子拒绝并发目标。失败关闭句柄即回收匿名文件，不存在临时路径替换或清理误删；不覆盖、删除已有目标。断电后的目录持久性不在当前保证范围。
 
@@ -76,7 +78,29 @@ cd tools/deploy
 
 该公开脚本通过 SSH/SCP 在 observer 工作目录部署数据，并且使用 admin 账户；本地直连运行须先配置对应测试账户、环境变量和 SSH，不能把删掉公开测试步骤的派生脚本称为原测试通过。
 
-运行状态和实测结果见本次交付说明。Sanitizer、跨平台和 Bazel 构建须单独验证，不由 Release 编译通过推断为通过。
+最终结果见下节。跨平台和 Bazel 构建未运行，不由 Release 编译通过推断为通过。
+
+## 最终构建与测试结果（2026-10-27）
+
+按用户最后要求减少验证，收尾仅运行最终版本的 File SQL 单元测试、一次成功的端到端回归和原始 mysqltest；未继续扩展专项检查。
+
+| 检查 | 实际命令或入口 | 结果 |
+| --- | --- | --- |
+| Release 配置 | `./build.sh release '-DTHIN_LTO_CONCURRENCY_LINK=-Wl,--threads=1,--thinlto-jobs=1'` | 成功 |
+| 最终构建 | `make -C build_release -j1 seekdb sql_tests` | 成功；此前并行链接共享库被系统 Killed，改为单作业、单线程链接后成功 |
+| Parser / 文件工具 | `GTEST_FILTER='FileSqlParser.*:FileScanUtils.*:FileSqlTypes.*' ./build_release/unittest/run_tests.sh -R '^sql_tests_shard_0$' -V` | 12 / 12 通过 |
+| 原生 SQL | 下方 `test_file_sql_integration.py` 命令 | 66 项 SQL 检查通过（含准备和清理）；覆盖坏页错误及服务存活、投影/过滤/聚合/HAVING、排序/LIMIT、JOIN、强制重扫、COPY、普通 SQL 等 |
+| 原始公开 mysqltest | 在 `tools/deploy` 执行 `../../deps/3rd/u01/obclient/bin/mysqltest --host=127.0.0.1 --port=2887 --user=root --database=test --ssl=0 --test-file=/tmp/file_sql_public_final.test --result-file=mysql_test/test_suite/file_sql/r/mysql/file_sql_basic.result` | `ok`；wrapper 仅设置部署变量并 source 原始 `.test`，原始部署/清理 include 和结果文件均未修改 |
+
+公开测试使用本任务创建的回环 SSH 服务、临时密钥及测试账户，不修改用户 SSH 配置；结束后删除临时账户和密钥并停止服务。wrapper 中含临时测试密码，完成后删除。正式部署仍可使用前述 `obd.sh mysqltest` 入口。
+
+最终测试实例为 `/tmp/seekdb-file-sql-final-mc5eyh1f`。旧实例目录 `/tmp/seekdb-file-sql-instance-lssC2d` 缺少并行 AI Column 改动新增的 `ai_expr` 内表字段，最终端到端首次在创建普通表时失败；保留旧目录，改用新建实例后全套成功，没有修改测试预期或绕过该普通表检查。两个测试实例均在结束后停止，目录保留。
+
+大文件检查读取 134,610,955 字节、131,072 行 CSV，查询输出正确，用时约 0.83 秒；该轮每 10 ms 采样的 RSS 增量为 0。RSS 采样不是精确峰值，也不能单独证明没有物化；流式约束还由读取状态、记录/批次上限及代码调用链保证。
+
+收尾前已完成的相关验证：Rust `cargo test --manifest-path rust/Cargo.toml -p file-sql` 的 2 个测试、Clippy `--all-targets -- -D warnings`、`cargo fmt --check` 均通过；工具及 parser 测试的 12 项 ASan/UBSan 检查通过（仅这些 C++ 源文件插桩，底层 Release 库未全量插桩，关闭 LeakSanitizer，不能视为全库内存安全证明）。二进制 prepared 的同路径值/类型变化重新绑定已实测，列数变化返回客户端 2057。未运行全库 Sanitizer、Bazel、跨平台、所有编码/压缩组合及长期压力测试。
+
+最后一次 `git diff --check` 通过。没有执行提交、推送或覆盖外部 AI Column 工作。
 
 ## 功能对照
 
@@ -86,7 +110,7 @@ cd tools/deploy
 | --- | --- | --- |
 | CSV | 状态机、多行引号、CRLF、转义、NULL/空字符串、重复表头、全文件推断、边界及坏数据用例 | 单字节 ASCII 控制字符；单记录 8 MiB |
 | JSONL | read_json/read_ndjson、全文件字段并集、稳定顺序、缺失 NULL、晚出现字段/类型冲突、重复键/嵌套拒绝 | 仅逐行扁平对象，空行拒绝 |
-| Parquet | Apache 解码、基础类型、列裁剪、空投影 COUNT、Snappy、多 Row Group、NULL、损坏元数据与压缩大小限制 | 编码与其他压缩未逐个运行；不支持类型见上文 |
+| Parquet | Apache 解码、基础类型、列裁剪、空投影 COUNT、Snappy、多 Row Group、NULL、损坏元数据与压缩大小限制 | Delta 系列未实现；其他压缩未逐个运行；不支持类型见上文 |
 | 绑定与元数据 | 命名参数、别名、列归属、星号、Unicode 等价名、DESCRIBE、glob | 只接受字面量；glob 仅最终路径分量 |
 | 原生 SQL | 表达式、WHERE、排序/LIMIT、聚合/HAVING、空结果、INNER/LEFT/跨格式 JOIN、EXPLAIN | 未单独覆盖每种优化器计划组合 |
 | 扫描生命周期 | 流式推断/扫描、批量取数、字符串有效期、强制无物化嵌套循环重扫、LIMIT/取消/失败关闭 | 文件一致性依据元数据检查，不是不可变快照 |
@@ -101,10 +125,19 @@ COPY 单独完成：表或原生查询流式输出、CSV 选项、NULL/空字符
 
 ```sh
 python3 unittest/sql/engine/basic/test_file_sql_integration.py \
-  --port 2887 --socket /tmp/seekdb-file-sql-instance-lssC2d/run/sql.sock \
+  --port 2887 --socket /tmp/seekdb-file-sql-final-mc5eyh1f/run/sql.sock \
   --large-rows 131072 \
-  --server-pid "$(cat /tmp/seekdb-file-sql-instance-lssC2d/run/seekdb.pid)"
+  --server-pid "$(cat /tmp/seekdb-file-sql-final-mc5eyh1f/run/seekdb.pid)"
 ```
+
+本次实例已停止；复用该目录可先运行（只操作本次创建的测试目录）：
+
+```sh
+./build_release/src/observer/seekdb --nodaemon \
+  --base-dir /tmp/seekdb-file-sql-final-mc5eyh1f --port 2887 --log-level WARN
+```
+
+新建实例时使用新的空目录，并增加本次实际使用的初始化参数：`--parameter memory_limit=2G --parameter log_disk_size=2G --parameter cpu_count=2 --parameter datafile_size=1G --parameter datafile_maxsize=2G`。完成后向该目录 `run/seekdb.pid` 中记录的进程发送 SIGTERM，等待退出后可删除自己创建的隔离目录。不要将旧内表结构的目录当作新版本的空实例。
 
 最小 SQL 例子（先通过 Unix socket 将 secure_file_priv 设置为已存在的测试目录；结束后恢复原值）：
 

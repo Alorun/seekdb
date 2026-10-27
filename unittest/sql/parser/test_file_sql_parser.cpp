@@ -69,6 +69,15 @@ TEST(FileSqlParser, exposes_flat_literal_arguments_to_binding)
   ASSERT_EQ(OB_SUCCESS, oceanbase::sql::file_sql::parse_options(*node, options, path));
   EXPECT_EQ("/tmp/input.csv", path);
   EXPECT_FALSE(options.header);
+  for (const char *query : {"select * from read_csv('/tmp/input.csv',f.header=true)",
+                            "select * from read_csv('/tmp/input.csv',(header+1)=true)"})
+  {
+    ParseResult invalid;
+    ASSERT_EQ(OB_SUCCESS, parser.parse(ObString(query), invalid));
+    const ParseNode *file = find_file_node(invalid.result_tree_);
+    ASSERT_NE(nullptr, file);
+    EXPECT_NE(OB_SUCCESS, oceanbase::sql::file_sql::parse_options(*file, options, path));
+  }
 }
 
 #endif

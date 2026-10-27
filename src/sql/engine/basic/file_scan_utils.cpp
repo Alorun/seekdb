@@ -202,9 +202,13 @@ int parse_options(const ParseNode &node, Options &o, std::string &path)
     if (!arg || arg->type_ != T_OP_EQ || arg->num_child_ != 2)
       return OB_ERR_PARSE_SQL;
     const ParseNode *key = arg->children_[0], *value = arg->children_[1];
-    if (key && key->type_ == T_COLUMN_REF && key->num_child_ == 3)
+    if (key && key->type_ == T_COLUMN_REF)
+    {
+      if (key->num_child_ != 3 || key->children_[0] || key->children_[1])
+        return error("named options require an unqualified identifier");
       key = key->children_[2];
-    if (!key || !value)
+    }
+    if (!key || key->type_ != T_IDENT || !key->str_value_ || key->str_len_ <= 0 || !value)
       return error("expected named literal option");
     std::string name = lower(std::string(key->str_value_, key->str_len_));
     if (!seen.insert(name).second)

@@ -36,8 +36,9 @@ endif()
 message(STATUS "[rust] cargo: ${CARGO}")
 
 # Map the CMake build type to a cargo profile and its output subdirectory.
-# Debug uses the dedicated cmake-debug profile (dev codegen + panic="abort")
-# rather than plain dev, so no linked build can unwind a panic into C++.
+# Debug uses the dedicated cmake-debug profile, with the same panic policy as
+# Release. File SQL catches decoder panics; other C ABI boundaries abort if a
+# panic escapes. Rust panics must never unwind into C++.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(_cargo_out_subdir "cmake-debug")
 else()

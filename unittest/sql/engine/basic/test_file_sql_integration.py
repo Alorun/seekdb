@@ -35,6 +35,8 @@ def main():
         result = subprocess.run(command + ['-e', prefix + sql], capture_output=True, text=True, timeout=40)
         if error:
             assert result.returncode != 0, f'expected failure: {sql}\n{result.stdout}'
+            if expected is not None:
+                assert expected in result.stderr, (sql, result.stderr, expected)
         else:
             assert result.returncode == 0, f'{sql}\n{result.stderr}'
             if expected is not None:
@@ -53,7 +55,11 @@ def main():
             shutil.copyfile(fixtures / name, data / name)
         (data / 'simple.parquet').write_bytes(base64.b64decode((fixtures / 'simple.parquet.b64').read_bytes()))
         multiple_groups = pathlib.Path(__file__).parent / 'data/file_sql_multiple_groups.parquet.b64'
-        (data / 'groups.parquet').write_bytes(base64.b64decode(multiple_groups.read_bytes()))
+        group_bytes = base64.b64decode(multiple_groups.read_bytes())
+        (data / 'groups.parquet').write_bytes(group_bytes)
+        corrupt_levels = bytearray(group_bytes)
+        corrupt_levels[47] ^= 255  # Bad level length previously panicked inside Bytes::slice.
+        (data / 'corrupt-levels.parquet').write_bytes(corrupt_levels)
         (data / 'right.jsonl').write_text('{"id":1,"v":"x"}\n{"id":1,"v":"y"}\n{"id":4,"v":"z"}\n')
         (data / 'late.jsonl').write_text('{"id":1}\n{"id":2,"late":true}\n{"id":"last","tail":null}\n')
         (data / 'noheader.csv').write_text('1|"a|b"\r\n2|""\r\n')
@@ -72,6 +78,7 @@ def main():
             run(f'select count(*) from {csv}', error=True, enabled=False)
             run(f'select count(*),sum(id),sum(active) from {csv}', '3\t6\t2')
             run(f'select id,name,score from {csv} where score>90 order by score desc limit 1', '1\tAlice\t98.5')
+            run(f'select id+1 as next_id,upper(name) as n from {csv} where id=1', '2\tALICE')
             run(f'select active,count(*) n from {csv} group by active having count(*)>1', '1\t2')
             run(f'select count(*),sum(id) from {csv} where id<0', '0\tNULL')
             run(f'select count(*),count(score),sum(score) from {json}', '3\t2\t188.5')
@@ -82,6 +89,7 @@ def main():
             assert 'NESTED-LOOP JOIN' in nested_plan and 'MATERIAL' not in nested_plan, nested_plan
 
             run(f"select c.id,r.v from {csv} c left join read_json('{data}/right.jsonl') r on c.id=r.id order by c.id,r.v", '1\tx\n1\ty\n2\tNULL\n3\tNULL')
+            run(f"select count(*),count(r.v) from {csv} c left join read_json('{data}/right.jsonl') r on c.id=r.id", '4\t2')
             run(f'select c.id,p.c1 from {csv} c join {parquet} p on c.id=p.c1 order by c.id', '1\t1\n2\t2\n3\t3')
             run(f'select count(*),min(c1),max(c1),sum(c1) from {parquet}', '7\t0\t6\t21')
             run(f'select count(*) from {parquet}', '7')
@@ -91,6 +99,14 @@ def main():
             run(f'select id,name from {groups} order by id', 'NULL\ttwo\n1\tone\n3\tNULL\n4\tfour\n5\tfive')
             run(f"select name from {groups} where name like 'f%' order by name", 'five\nfour')
             run(f'select sum(p.id) from {csv} c join {groups} p on c.id=p.id', '4')
+            run(f"select * from read_parquet('{data}/corrupt-levels.parquet')", 'panic contained', error=True)
+            run('select 1', '1', enabled=False)
+            if args.server_pid:
+                for descriptor in (pathlib.Path('/proc') / str(args.server_pid) / 'fd').iterdir():
+                    try:
+                        assert descriptor.readlink() != data / 'corrupt-levels.parquet', descriptor
+                    except FileNotFoundError:
+                        pass
             run(f"select column0,column1 from read_csv('{data}/noheader.csv',header=false,delimiter='|') order by column0", '1\ta|b\n2\t')
             run(f"select id,late,tail from read_json('{data}/late.jsonl') order by id", '1\tNULL\tNULL\n2\t1\tNULL\nlast\tNULL\tNULL')
             schema = run(f'describe select * from {csv}')
