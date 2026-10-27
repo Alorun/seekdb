@@ -164,12 +164,50 @@ int ObExprJsonLength::eval_json_length(const ObExpr &expr, ObEvalCtx &ctx, ObDat
   return ret;
 }
 
+int ObExprJsonLength::eval_json_length_batch(const ObExpr &expr, ObEvalCtx &ctx,
+                                            const ObBitVector &skip, int64_t batch_size)
+{
+  int ret = OB_SUCCESS;
+  ObEvalCtx::TempAllocGuard alloc_guard(ctx);
+  ObEvalCtx::BatchInfoScopeGuard batch_guard(ctx);
+  batch_guard.set_batch_size(batch_size);
+  ObBitVector &evaluated = expr.get_evaluated_flags(ctx);
+  void *bits = nullptr;
+  if (batch_size <= 0) {
+  } else if (OB_ISNULL(bits = alloc_guard.get_allocator().alloc(ObBitVector::memory_size(batch_size)))) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else {
+    ObBitVector *pending_skip = to_bit_vector(bits);
+    pending_skip->bit_calculate(skip, evaluated, batch_size,
+        [](uint64_t left, uint64_t right) { return left | right; });
+    const bool has_pending = pending_skip->accumulate_bit_cnt(batch_size) < batch_size;
+    // Evaluate strict arguments in batches so a child such as AI_EMBED can
+    // collect all selected inputs before the per-row JSON parsing below.
+    for (int64_t i = 0; OB_SUCC(ret) && has_pending && i < expr.arg_cnt_; ++i) {
+      if (OB_FAIL(expr.args_[i]->eval_batch(ctx, *pending_skip, batch_size))) {
+      }
+    }
+    ObDatum *output = expr.locate_batch_datums(ctx);
+    for (int64_t row = 0; OB_SUCC(ret) && row < batch_size; ++row) {
+      if (!pending_skip->at(row)) {
+        batch_guard.set_batch_idx(row);
+        if (OB_FAIL(eval_json_length(expr, ctx, output[row]))) {
+        } else {
+          evaluated.set(row);
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObExprJsonLength::cg_expr(ObExprCGCtx &expr_cg_ctx, const ObRawExpr &raw_expr,
                               ObExpr &rt_expr) const
 {
   UNUSED(expr_cg_ctx);
   UNUSED(raw_expr);
   rt_expr.eval_func_ = eval_json_length;
+  rt_expr.eval_batch_func_ = eval_json_length_batch;
   return OB_SUCCESS;
 }
 
