@@ -39,6 +39,8 @@ public:
   ~TokenizeContext();
 
   int init();
+  int reuse(const char *fulltext, int64_t fulltext_len, bool is_smart);
+  void clear_document();
   int reset_resource();
 
   int get_next_token(const char *&word, int64_t &word_len, int64_t &offset, int64_t &char_cnt);
@@ -100,6 +102,8 @@ public:
   ObIIKProcessor() {}
 
   virtual ~ObIIKProcessor() {}
+
+  virtual void clear_document() = 0;
 
   int process(TokenizeContext &ctx);
 

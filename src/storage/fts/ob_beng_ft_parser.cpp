@@ -49,7 +49,9 @@ int ObBEngFTParser::get_next_token(
     }
   } else if (OB_ISNULL(token.ptr_) || OB_UNLIKELY(0 >= token.len_ || 0 >= token_freq)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(buf = static_cast<char *>(allocator_.alloc(token.len_)))) {
+  } else if (OB_ISNULL(token_allocator_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_ISNULL(buf = static_cast<char *>(token_allocator_->alloc(token.len_)))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
     MEMCPY(buf, token.ptr_, token.len_);
@@ -76,7 +78,8 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     analysis_ctx_.cs_ = param->cs_;
     analysis_ctx_.filter_stopword_ = false;
     analysis_ctx_.need_grouping_ = false;
-    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, *param->allocator_))) {
+    token_allocator_ = param->allocator_;
+    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, allocator_))) {
     } else if (OB_FAIL(segment(doc_, token_stream_))) {
     } else if (OB_ISNULL(token_stream_)) {
       ret = OB_ERR_UNEXPECTED;
@@ -86,6 +89,33 @@ int ObBEngFTParser::init(ObFTParserParam *param)
   }
   if (OB_FAIL(ret) && OB_UNLIKELY(!is_inited_)) {
     reset();
+  }
+  return ret;
+}
+
+void ObBEngFTParser::clear_document()
+{
+  if (nullptr != token_stream_) {
+    token_stream_->reuse();
+  }
+  doc_.reset();
+  token_allocator_ = nullptr;
+}
+
+int ObBEngFTParser::reuse(ObFTParserParam *param)
+{
+  int ret = OB_SUCCESS;
+  if (!is_inited_) {
+    ret = OB_NOT_INIT;
+  } else if (nullptr == param || !param->is_valid() || param->cs_ != analysis_ctx_.cs_) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (UINT32_MAX < param->ft_length_) {
+    ret = OB_NOT_SUPPORTED;
+  } else {
+    clear_document();
+    token_allocator_ = param->allocator_;
+    doc_.set_string(param->fulltext_, param->ft_length_);
+    ret = segment(doc_, token_stream_);
   }
   return ret;
 }
@@ -109,6 +139,7 @@ void ObBEngFTParser::reset()
   analysis_ctx_.reset();
   english_analyzer_.reset();
   doc_.reset();
+  token_allocator_ = nullptr;
   token_stream_ = nullptr;
   is_inited_ = false;
 }
