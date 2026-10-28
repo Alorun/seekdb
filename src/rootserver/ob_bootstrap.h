@@ -89,6 +89,14 @@ private:
   DISALLOW_COPY_AND_ASSIGN(ObPreBootstrap);
 };
 
+// Startup-only, idempotent installation. Uses a single DDL transaction for
+// physical tablets and catalog changes; never runs inside a business session.
+class AiColumnInnerSchemaInstaller
+{
+public:
+  static int ensure_ready(ObDDLService &ddl_service, ObRuntimeDDLService &runtime_ddl_service);
+};
+
 class ObBootstrap : public ObBaseBootstrap
 {
 public:
@@ -108,6 +116,7 @@ private:
 
   virtual ~ObBootstrap() {}
   virtual int execute_bootstrap();
+  int install_ai_column_inner_schema();
   int load_all_schema(
       ObDDLService &ddl_service,
       common::ObIArray<share::schema::ObTableSchema> &table_schemas);

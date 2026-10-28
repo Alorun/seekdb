@@ -217,6 +217,7 @@ struct ObTempExprBackupCtx;
 // ObExecContext can be serialized, but cannot be deserialized;
 // And ObDesExecContext cannot be serialized, but can be deserialized;
 // Use ObExecContext to serialize, then deserialize correspondingly with ObDesExecContext
+namespace ai_column { class StatementContext; struct WriteCapability; }
 class ObExecContext
 {
 public:
@@ -413,6 +414,12 @@ public:
     return vt_factory_provider_;
   }
   //get the parent execute context in nested sql
+  ai_column::StatementContext *&ai_column_context() { return ai_column_context_; }
+  bool ai_column_internal_sql() const { return ai_column_internal_sql_; }
+  void set_ai_column_internal_sql(bool value) { ai_column_internal_sql_ = value; }
+  const ai_column::WriteCapability *ai_column_capability() const { return ai_column_capability_; }
+  void set_ai_column_capability(const ai_column::WriteCapability *value) { ai_column_capability_ = value; }
+  const ai_column::WriteCapability *&ai_column_next_capability() { return ai_column_next_capability_; }
   ObExecContext *get_parent_ctx() { return parent_ctx_; }
   int64_t get_nested_level() const { return nested_level_; }
   /**
@@ -919,6 +926,10 @@ protected:
   //to link the parent exec ctx in the nested sql
   //in order to access the parent sql attributes,
   //such as the mutating option checking or nested sql constraining checking
+  ai_column::StatementContext *ai_column_context_ = nullptr;
+  bool ai_column_internal_sql_ = false;
+  const ai_column::WriteCapability *ai_column_capability_ = nullptr;
+  const ai_column::WriteCapability *ai_column_next_capability_ = nullptr;
   ObExecContext *parent_ctx_;
   int64_t nested_level_; //the number of recursive SQL levels
   bool is_ps_prepare_stage_;

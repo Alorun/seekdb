@@ -1325,6 +1325,10 @@ int ObServer::start()
       FLOG_INFO("server metadata is ready");
     }
 
+    if (OB_SUCC(ret) && OB_FAIL(local_management_service_.install_ai_column_inner_schema())) {
+      LOG_ERROR("failed to install asynchronous AI column inner schema", KR(ret));
+    }
+
     if (FAILEDx(net_frame_.start())) {
       LOG_ERROR("fail to start net frame", KR(ret));
     } else {

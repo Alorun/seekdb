@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_ENG
+#include "sql/engine/dml/ai_column_dml.h"
 #include "data_plane/lob/ob_lob_access_context.h"
 #include "query/engine/ob_exec_context_access.h"
 #include "query/session/ob_session_access.h"
@@ -316,6 +317,11 @@ void ObExecContext::set_runtime_services(const RuntimeServices &services)
 
 ObExecContext::~ObExecContext()
 {
+  if (ai_column_context_ != nullptr) {
+    ai_column_context_->~StatementContext();
+    ai_column_context_ = nullptr;
+  }
+
   row_id_list_array_.reset();
   destroy_eval_allocator();
   reset_op_ctx();

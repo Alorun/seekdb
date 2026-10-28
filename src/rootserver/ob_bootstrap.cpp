@@ -18,6 +18,8 @@
 
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "rootserver/ob_bootstrap.h"
+#include "rootserver/ob_rootserver_local_runtime.h"
+#include "share/schema/ob_table_sql_service.h"
 #include "rootserver/ob_runtime_ddl_service.h"
 #include "share/rc/ob_server_runtime.h"
 
@@ -450,6 +452,118 @@ int ObBootstrap::get_core_related_table_ids(common::hash::ObHashSet<uint64_t> &t
       }
     }
   }
+  return ret;
+}
+
+int AiColumnInnerSchemaInstaller::ensure_ready(ObDDLService &ddl_service,
+                                                ObRuntimeDDLService &runtime_ddl_service)
+{
+  ObBootstrap bootstrap(ddl_service, runtime_ddl_service);
+  return bootstrap.install_ai_column_inner_schema();
+}
+
+int ObBootstrap::install_ai_column_inner_schema()
+{
+  int ret = OB_SUCCESS;
+  ObArenaAllocator allocator("AiInnerInstall");
+  ObSArray<ObTableSchema> desired;
+  ObArray<uint64_t> existing;
+  ObArray<ObTableSchema> installed;
+  ObSchemaGetterGuard guard;
+  int64_t version = 0;
+  ObMySQLProxy &proxy = ddl_service_.get_sql_proxy();
+  ObMultiVersionSchemaService &schema_service = ddl_service_.get_schema_service();
+  ObDDLOperator ddl_operator(schema_service, proxy);
+  const uint64_t feature_ids[] = {1131, 1132, 1135, 51131, 51132, 51135,
+                                  61131, 61132, 61135, 102060, 102061, 102062};
+  auto read_ids = [&](const char *sql, const char *field, ObIArray<uint64_t> &ids) -> int {
+    int status = OB_SUCCESS;
+    ObMySQLProxy::MySQLResult result;
+    if (OB_FAIL(proxy.read(result, sql))) { status = ret; }
+    else if (result.get_result() == nullptr) { status = OB_ERR_UNEXPECTED; }
+    else {
+      sqlclient::ObMySQLResult *rows = result.get_result();
+      while (OB_SUCCESS == (status = rows->next())) {
+        uint64_t value = 0;
+        if (OB_SUCCESS != (status = rows->get_uint(field, value)) ||
+            OB_SUCCESS != (status = ids.push_back(value))) { break; }
+      }
+      if (status == OB_ITER_END) { status = OB_SUCCESS; }
+    }
+    return status;
+  };
+  if (OB_FAIL(construct_all_schema(desired, allocator))) {
+  } else if (OB_FAIL(read_ids("SELECT table_id FROM oceanbase.__all_table", "table_id", existing))) {
+  } else if (OB_FAIL(schema_service.get_runtime_schema_guard(guard))) {
+  } else if (OB_FAIL(guard.get_schema_version(version))) {
+  }
+  ObDDLSQLTransaction trans(&schema_service, true, true, false, false, false);
+  if (OB_SUCC(ret) && OB_FAIL(trans.start(&proxy, version))) {
+  }
+  common::hash::ObHashMap<uint64_t, const ObTableSchema *> by_id;
+  if (OB_SUCC(ret) && OB_FAIL(by_id.create(hash::cal_next_prime(desired.count()), "AiInnerIds"))) {
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < desired.count(); ++i) {
+    if (OB_FAIL(by_id.set_refactored(desired.at(i).get_table_id(), &desired.at(i)))) {
+    }
+  }
+  ObTableCreator creator(SCN::base_scn(), trans);
+  if (OB_SUCC(ret) && OB_FAIL(creator.init(false))) {
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < desired.count(); ++i) {
+    ObTableSchema &table = desired.at(i);
+    const uint64_t tid = table.get_table_id();
+    bool feature = false;
+    for (const uint64_t id : feature_ids) { feature = feature || tid == id; }
+    if (feature && !has_exist_in_array(existing, tid)) {
+      // The base table creates its indexes and both LOB tablets together.
+      if ((tid == 1131 || tid == 1132 || tid == 1135) &&
+          OB_FAIL(prepare_create_partitions(creator, table, by_id))) {
+      } else if (OB_FAIL(ddl_operator.create_table(table, trans, nullptr,
+                       !ObSysTableChecker::is_sys_table_index_tid(tid) && !is_sys_lob_table(tid), false))) {
+      } else if (OB_FAIL(installed.push_back(table))) {
+      }
+    }
+    if (OB_SUCC(ret) && (tid == OB_ALL_COLUMN_TID || tid == OB_ALL_COLUMN_HISTORY_TID)) {
+      ObArray<uint64_t> column_ids;
+      ObSqlString query;
+      if (OB_FAIL(query.append_fmt("SELECT column_id FROM oceanbase.__all_column WHERE table_id=%lu", tid))) {
+      } else if (OB_FAIL(read_ids(query.ptr(), "column_id", column_ids))) {
+      }
+      bool changed = false;
+      for (ObTableSchema::const_column_iterator it = table.column_begin();
+           OB_SUCC(ret) && it != table.column_end(); ++it) {
+        ObColumnSchemaV2 *column = *it;
+        if (column != nullptr && column->get_column_name_str().prefix_match("ai_") &&
+            !has_exist_in_array(column_ids, column->get_column_id())) {
+          if (OB_FAIL(ddl_operator.insert_single_column(trans, table, *column))) {
+          } else { changed = true; table.set_schema_version(column->get_schema_version()); }
+        }
+      }
+      if (OB_SUCC(ret) && changed) {
+        if (OB_FAIL(schema_service.get_schema_service()->get_table_sql_service().update_table_attribute(
+                     trans, table, OB_DDL_ALTER_TABLE, false))) {
+        } else if (OB_FAIL(installed.push_back(table))) {
+        }
+      }
+    }
+  }
+  if (OB_SUCC(ret) && installed.count() > 0 && OB_FAIL(creator.execute())) {
+  }
+  if (trans.is_started()) {
+    const int tmp_ret = trans.end(OB_SUCC(ret));
+    if (OB_SUCC(ret)) { ret = tmp_ret; }
+  }
+  if (OB_SUCC(ret) && installed.count() > 0 &&
+      OB_FAIL(schema_service.broadcast_runtime_schema(installed))) {
+  }
+  if (OB_SUCC(ret)) {
+    int64_t affected = 0;
+    ret = proxy.write("INSERT IGNORE INTO oceanbase.__all_ai_column_control "
+                      "(table_id,column_id,definition_version,kind,state,format_version) "
+                      "VALUES (0,0,1,0,1,1)", affected);
+  }
+  LOG_INFO("AI column inner schema installation completed", K(ret), K(installed.count()));
   return ret;
 }
 

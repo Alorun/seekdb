@@ -1174,6 +1174,16 @@ void ObTableSchema::reset_column_part_key_info()
   }
 }
 
+bool ObTableSchema::has_ai_column() const
+{
+  bool found = false;
+  for (int64_t i = 0; !found && i < get_column_count(); ++i) {
+    const ObColumnSchemaV2 *column = get_column_schema_by_idx(i);
+    found = column != nullptr && column->is_ai_column();
+  }
+  return found;
+}
+
 int ObTableSchema::assign(const ObTableSchema &src_schema)
 {
   int ret = OB_SUCCESS;

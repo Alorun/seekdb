@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_CG
 #include "ob_dml_cg_service.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "sql/code_generator/ob_static_engine_cg.h"
 #include "sql/engine/ob_physical_plan.h"
 #include "sql/parser/ob_parser.h"
@@ -2093,6 +2094,15 @@ int ObDmlCgService::generate_dml_base_ctdef(ObLogicalOperator &op,
                                             ObIArray<ObRawExpr*> &new_row)
 {
   int ret = OB_SUCCESS;
+  if (index_dml_info.is_primary_index_) {
+    const ObTableSchema *ai_schema = nullptr;
+    if (OB_FAIL(cg_.opt_ctx_->get_schema_guard()->get_table_schema(index_dml_info.ref_table_id_, ai_schema))) {
+      return ret;
+    }
+    dml_base_ctdef.has_ai_columns_ = ai_schema != nullptr && ai_schema->has_ai_column();
+    ObExecContext *ai_ctx = cg_.opt_ctx_->get_exec_ctx();
+    dml_base_ctdef.ai_private_write_ = ai_ctx != nullptr && ai_ctx->ai_column_capability() != nullptr;
+  }
   dml_base_ctdef.is_primary_index_ = index_dml_info.is_primary_index_;
   dml_base_ctdef.is_vec_hnsw_index_vid_opt_ = index_dml_info.is_vec_hnsw_index_vid_opt_;
   dml_base_ctdef.column_ids_.set_capacity(index_dml_info.column_exprs_.count());

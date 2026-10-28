@@ -1199,6 +1199,8 @@ public:
       common::ObNewRow &default_row) const;
   void reset_column_info();
   inline int64_t get_column_count() const { return column_cnt_; }
+  bool has_ai_column() const;
+
   inline void reset_column_count() { column_cnt_ = 0; }
   inline int64_t get_constraint_count() const { return cst_cnt_; }
   inline bool get_micro_index_clustered() const { return micro_index_clustered_; }

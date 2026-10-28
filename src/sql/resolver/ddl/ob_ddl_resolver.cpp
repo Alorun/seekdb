@@ -2074,6 +2074,9 @@ int ObDDLResolver::resolve_ai_column_attribute(ObColumnSchemaV2 &column, const P
                     *allocator_, session_info_->get_dtc_params(), expr))) {
     } else if (OB_FAIL(column.set_ai_expr(expr))) {
     }
+    if (OB_SUCC(ret)) {
+      ret = ObLocalSessionVarHelper::load_session_vars(session_info_, column.get_local_session_var());
+    }
     column.set_ai_max_retries(2);
     bool seen_sync = false;
     bool seen_retries = false;

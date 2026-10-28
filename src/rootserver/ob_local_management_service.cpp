@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "rootserver/ob_bootstrap.h"
+
 #define USING_LOG_PREFIX RS
 
 #include "config_bridge.h"
@@ -2624,6 +2626,11 @@ int ObLocalManagementService::check_data_disk_usage_limit_(obcall::ObAdminSetCon
 #undef CHECK_CONFIG_WITH_FUNC
 
 //ensure execute on DDL thread
+int ObLocalManagementService::install_ai_column_inner_schema()
+{
+  return AiColumnInnerSchemaInstaller::ensure_ready(ddl_service_, runtime_ddl_service_);
+}
+
 int ObLocalManagementService::force_create_sys_table(const obcall::ObForceCreateSysTableArg &arg)
 {
   return OB_NOT_SUPPORTED;

@@ -3373,7 +3373,9 @@ bool ObSQLUtils::is_iter_uncommitted_row(ObExecContext *cur_ctx)
 
 bool ObSQLUtils::is_nested_sql(ObExecContext *cur_ctx)
 {
-  return is_pl_nested_sql(cur_ctx) || is_fk_nested_sql(cur_ctx) || is_online_stat_gathering_nested_sql(cur_ctx);
+  return is_pl_nested_sql(cur_ctx) || is_fk_nested_sql(cur_ctx) || is_online_stat_gathering_nested_sql(cur_ctx)
+      || (cur_ctx != nullptr && cur_ctx->get_parent_ctx() != nullptr
+          && cur_ctx->get_parent_ctx()->ai_column_internal_sql());
 }
 
 //bind current execute context to my session,
@@ -3388,6 +3390,11 @@ void LinkExecCtxGuard::link_current_context()
     //to facilitate subsequent access to the execution status of parent sql
     ObExecContext *parent_ctx = session_.get_cur_exec_ctx();
     exec_ctx_.set_parent_ctx(parent_ctx);
+    if (parent_ctx != nullptr && parent_ctx->ai_column_next_capability() != nullptr) {
+      exec_ctx_.set_ai_column_capability(parent_ctx->ai_column_next_capability());
+      parent_ctx->ai_column_next_capability() = nullptr;
+    }
+
     if (parent_ctx != nullptr) {
       //mark the recursive sql levels
       exec_ctx_.set_nested_level(parent_ctx->get_nested_level() + 1);

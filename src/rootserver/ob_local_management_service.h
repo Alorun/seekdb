@@ -288,6 +288,7 @@ public:
   int schedule_load_ddl_task();
   // ob_admin command, must be called in ddl thread
   int force_create_sys_table(const obcall::ObForceCreateSysTableArg &arg);
+  int install_ai_column_inner_schema();
   ObDDLService &get_ddl_service() { return ddl_service_; }
   ObMaxIdCacheMgr &get_max_id_cache_mgr() { return max_id_cache_mgr_; }
   int purge_recyclebin_objects(int64_t purge_each_time);

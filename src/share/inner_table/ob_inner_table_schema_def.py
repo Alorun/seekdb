@@ -2456,6 +2456,42 @@ all_ai_model_endpoint_def = dict(
 def_table_schema(**all_ai_model_endpoint_def)
 
 
+# Transactional outbox for asynchronous AI columns. Short hidden result_spec
+# columns only carry identities and versions; inputs and responses use LOBs.
+def_table_schema(
+  owner = 'seekdb', table_name = '__all_ai_column_task', table_id = '1131',
+  table_type = 'SYSTEM_TABLE', gm_columns = ['gmt_create', 'gmt_modified'],
+  is_cluster_private = False, meta_record_in_sys = False,
+  rowkey_columns = [('table_id', 'int'), ('request_id', 'varbinary:36'), ('column_id', 'int')],
+  normal_columns = [
+    ('database_id', 'int', 'false'), ('row_incarnation', 'varbinary:16', 'false'),
+    ('rowkey', 'longblob', 'true'), ('rowkey_predicate', 'longtext', 'true'),
+    ('generation', 'uint', 'false', 0), ('definition_version', 'int', 'false', 0),
+    ('state', 'int', 'false', 1), ('eligible_ts', 'timestamp', 'true'),
+    ('claim_token', 'varbinary:16', 'true'), ('lease_until', 'timestamp', 'true'),
+    ('attempt_intents', 'int', 'false', 0), ('retry_count', 'int', 'false', 0),
+    ('max_retries', 'int', 'false', 2), ('model_id', 'int', 'false', 0),
+    ('model_name', 'varchar:128', 'false'), ('operation', 'int', 'false', 0),
+    ('prepared_call', 'longblob', 'true'), ('result_type_spec', 'longblob', 'true'),
+    ('eval_context', 'longblob', 'true'), ('attempt_context', 'longblob', 'true'),
+    ('raw_response', 'longblob', 'true'), ('typed_result', 'longblob', 'true'),
+    ('error_code', 'int', 'false', 0), ('error_class', 'int', 'false', 0),
+    ('error_message', 'varchar:2048', 'true'),
+  ])
+
+def_table_schema(
+  owner = 'seekdb', table_name = '__all_ai_column_group', table_id = '1132',
+  table_type = 'SYSTEM_TABLE', gm_columns = ['gmt_create', 'gmt_modified'],
+  is_cluster_private = False, meta_record_in_sys = False,
+  rowkey_columns = [('table_id', 'int'), ('request_id', 'varbinary:36')],
+  normal_columns = [
+    ('database_id', 'int', 'false'), ('row_incarnation', 'varbinary:16', 'false'),
+    ('rowkey', 'longblob', 'true'), ('member_count', 'int', 'false', 0),
+    ('state', 'int', 'false', 0),
+  ])
+
+
+
 all_objauth_mysql_def = dict(
     owner = 'cjl476581',
     table_name     = '__all_objauth_mysql',
@@ -2475,6 +2511,19 @@ all_objauth_mysql_def = dict(
   )
 def_table_schema(**all_objauth_mysql_def)
 def_table_schema(**gen_history_table_def(1134, all_objauth_mysql_def))
+
+def_table_schema(
+  owner = 'seekdb', table_name = '__all_ai_column_control', table_id = '1135',
+  table_type = 'SYSTEM_TABLE', gm_columns = ['gmt_create', 'gmt_modified'],
+  is_cluster_private = False, meta_record_in_sys = False,
+  rowkey_columns = [('table_id', 'int'), ('column_id', 'int'), ('definition_version', 'int')],
+  normal_columns = [
+    ('kind', 'int', 'false', 0), ('ddl_schema_version', 'int', 'false', 0),
+    ('state', 'int', 'false', 0), ('cursor_rowkey', 'longblob', 'true'),
+    ('claim_token', 'varbinary:16', 'true'), ('lease_until', 'timestamp', 'true'),
+    ('eligible_ts', 'timestamp', 'true'), ('format_version', 'int', 'false', 1),
+  ])
+
 
 
 # Reserved position (placeholder before this line)
@@ -14443,6 +14492,15 @@ def_sys_index_table(
   index_using_type = 'USING_BTREE',
   index_type = 'INDEX_TYPE_NORMAL_LOCAL',
   keywords = all_def_keywords['__all_objauth_mysql'])
+
+
+for _ai_index_name, _ai_index_id, _ai_index_columns in [
+    ('idx_ai_task_due', 102060, ['state', 'eligible_ts']),
+    ('idx_ai_task_lease', 102061, ['state', 'lease_until']),
+    ('idx_ai_task_row', 102062, ['table_id', 'row_incarnation'])]:
+  def_sys_index_table(index_name = _ai_index_name, index_table_id = _ai_index_id,
+    index_columns = _ai_index_columns, index_using_type = 'USING_BTREE',
+    index_type = 'INDEX_TYPE_NORMAL_LOCAL', keywords = all_def_keywords['__all_ai_column_task'])
 
 
 # Reserved position (placeholder before this line)

@@ -435,6 +435,8 @@ public:
   ExprFixedArray view_check_exprs_;
   bool is_primary_index_;
   bool is_table_without_pk_;
+  bool has_ai_columns_ = false;
+  bool ai_private_write_ = false;
   bool reserved_advanced_trigger_;
   ObExpr *trans_info_expr_;
   bool is_vec_hnsw_index_vid_opt_;
