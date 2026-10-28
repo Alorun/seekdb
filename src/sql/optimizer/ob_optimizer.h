@@ -221,7 +221,7 @@ namespace sql
                                                  const ObSQLSessionInfo &session,
                                                  bool &use_parallel_das_dml);
 
-    int check_dml_parallel_mode();
+    int check_dml_parallel_mode(const ObDMLStmt &stmt);
     int check_is_heap_table(const ObDMLStmt &stmt);
     int extract_column_usage_info(const ObDMLStmt &stmt);
     int analyze_one_expr(const ObDMLStmt &stmt, const ObRawExpr *expr);

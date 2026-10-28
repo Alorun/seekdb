@@ -17,6 +17,8 @@
 #define USING_LOG_PREFIX RS
 
 #include "ob_ddl_operator.h"
+#include "sql/resolver/ob_resolver_utils.h"
+#include "storage/tablelock/ob_lock_inner_connection_util.h"
 #include "share/ob_autoincrement_service.h"
 #include "rootserver/ob_dependency_ddl_helper.h"
 #include "lib/encrypt/ob_encrypted_helper.h"
@@ -50,6 +52,44 @@ using namespace storage;
 
 namespace rootserver
 {
+
+namespace {
+int acquire_ai_ddl_barrier(ObMySQLTransaction &trans)
+{
+  auto *ddl = dynamic_cast<ObDDLSQLTransaction *>(&trans);
+  return ddl == nullptr ? OB_ERR_UNEXPECTED : ddl->hold_ai_schema_barrier();
+}
+int discard_ai_column_tasks(ObMySQLTransaction &trans, const ObTableSchema &table,
+                            const uint64_t column_id = OB_INVALID_ID, const bool table_locked = false)
+{
+  int ret = OB_SUCCESS;
+  if (!table.has_ai_column()) { return ret; }
+  if (OB_FAIL(acquire_ai_ddl_barrier(trans))) { return ret; }
+  if (!table_locked && OB_FAIL(transaction::tablelock::ObInnerConnectionLockUtil::lock_table(table.get_table_id(),
+          transaction::tablelock::EXCLUSIVE, 10000000, trans.get_connection()))) { return ret; }
+  ObSqlString sql;
+  int64_t affected = 0;
+  if (column_id == OB_INVALID_ID) {
+    const char *names[] = {"__all_ai_column_task", "__all_ai_column_group", "__all_ai_column_control"};
+    for (int i = 0; OB_SUCC(ret) && i < 3; ++i) {
+      sql.reset();
+      if (OB_FAIL(sql.append_fmt("DELETE FROM oceanbase.%s WHERE table_id=%lu", names[i], table.get_table_id()))) {
+      } else { ret = trans.write(sql.ptr(), affected); }
+    }
+  } else {
+    if (OB_FAIL(sql.append_fmt("UPDATE oceanbase.__all_ai_column_task SET state=6,claim_token=NULL,lease_until=NULL "
+              "WHERE table_id=%lu AND column_id=%lu", table.get_table_id(), column_id))) {
+    } else if (OB_FAIL(trans.write(sql.ptr(), affected))) {
+    } else {
+      sql.reset();
+      if (OB_FAIL(sql.append_fmt("DELETE FROM oceanbase.__all_ai_column_control WHERE table_id=%lu AND column_id=%lu",
+                                table.get_table_id(), column_id))) {
+      } else { ret = trans.write(sql.ptr(), affected); }
+    }
+  }
+  return ret;
+}
+} // anonymous namespace
 
 
 ObSysStat::Item::Item(ObSysStat::ItemList &list, const char *name, const char *info)
@@ -460,6 +500,18 @@ int ObDDLOperator::drop_database_to_recyclebin(const ObDatabaseSchema &database_
     ObRecycleObject recycle_object;
     ObDatabaseSchema new_database_schema;
     ObSchemaService *schema_service = schema_service_.get_schema_service();
+    ObSchemaGetterGuard ai_guard;
+    ObArray<uint64_t> ai_tables;
+    if (OB_FAIL(schema_service_.get_runtime_schema_guard(ai_guard))) {
+    } else if (OB_FAIL(ai_guard.get_table_ids_in_database(database_id, ai_tables))) {
+    }
+    std::sort(ai_tables.begin(), ai_tables.end());
+    for (int64_t i = 0; OB_SUCC(ret) && i < ai_tables.count(); ++i) {
+      const ObTableSchema *table = nullptr;
+      if (OB_FAIL(ai_guard.get_table_schema(ai_tables.at(i), table))) {
+      } else if (table != nullptr) { ret = discard_ai_column_tasks(trans, *table); }
+    }
+    if (OB_FAIL(ret)) { return ret; }
     recycle_object.set_type(ObRecycleObject::DATABASE);
     recycle_object.set_database_id(database_schema.get_database_id());
     recycle_object.set_table_id(OB_INVALID_ID);
@@ -923,7 +975,10 @@ int ObDDLOperator::truncate_table(const ObString *ddl_stmt_str,
                                   const share::schema::ObTableSchema &new_table_schema,
                                   common::ObMySQLTransaction &trans)
 {
-  int ret = OB_SUCCESS;
+  // new_truncate_table holds EXCLUSIVE before replacing the old tablets.
+  // Reacquiring through lock_table here would try to lock the retired tablet.
+  int ret = discard_ai_column_tasks(trans, orig_table_schema, OB_INVALID_ID, true);
+  if (OB_FAIL(ret)) { return ret; }
   bool is_truncate_table = true;
   bool is_truncate_partition = false;
   uint64_t table_id = new_table_schema.get_table_id();
@@ -1268,11 +1323,23 @@ int ObDDLOperator::insert_single_column(ObMySQLTransaction &trans,
   ObSchemaService *schema_service = schema_service_.get_schema_service();
   if (OB_ISNULL(schema_service)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (new_column.is_ai_column() && OB_FAIL(acquire_ai_ddl_barrier(trans))) {
+  } else if (new_column.is_ai_column() && OB_FAIL(transaction::tablelock::ObInnerConnectionLockUtil::lock_table(
+        new_table_schema.get_table_id(), transaction::tablelock::EXCLUSIVE, 10000000, trans.get_connection()))) {
   } else if (OB_FAIL(schema_service_.gen_new_schema_version(new_schema_version))) {
   } else if (FALSE_IT(new_column.set_schema_version(new_schema_version))) {
     //do nothing
   } else if (OB_FAIL(schema_service->get_table_sql_service().insert_single_column(
              trans, new_table_schema, new_column, true))) {
+  }
+  if (OB_SUCC(ret) && new_column.is_ai_column()) {
+    ObSqlString sql;
+    int64_t affected = 0;
+    if (OB_FAIL(sql.append_fmt("INSERT INTO oceanbase.__all_ai_column_control"
+          "(table_id,column_id,definition_version,kind,ddl_schema_version,state,eligible_ts,format_version) "
+          "VALUES(%lu,%lu,%ld,1,%ld,0,NOW(6),1)", new_table_schema.get_table_id(),
+          new_column.get_column_id(), new_column.get_ai_definition_version(), new_table_schema.get_schema_version()))) {
+    } else { ret = trans.write(sql.ptr(), affected); }
   }
   return ret;
 }
@@ -1283,7 +1350,6 @@ int ObDDLOperator::delete_single_column(ObMySQLTransaction &trans,
                                         const ObString &column_name)
 {
   int ret = OB_SUCCESS;
-
   ObColumnSchemaV2 *orig_column = NULL;
   ObSchemaService *schema_service = schema_service_.get_schema_service();
   if (OB_ISNULL(schema_service)) {
@@ -1293,6 +1359,45 @@ int ObDDLOperator::delete_single_column(ObMySQLTransaction &trans,
   } else if (OB_ISNULL(orig_column = new_table_schema.get_column_schema(column_name))) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("get column schema from table failed", K(column_name));
+  } else if (orig_column->is_ai_column() &&
+             OB_FAIL(discard_ai_column_tasks(trans, new_table_schema, orig_column->get_column_id()))) {
+  } else if (orig_column->is_ai_column()) {
+    // Follow instant DROP's unused-column contract. Physically removing a
+    // stored column changes the row layout before old memtable rows have been
+    // rewritten and can reinterpret later values using the dropped type.
+    ObTableSchema before_drop;
+    const uint64_t ids[] = {orig_column->get_column_id(), orig_column->get_ai_state_column_id(),
+                            orig_column->get_ai_request_column_id(), orig_column->get_ai_result_spec_column_id()};
+    if (OB_FAIL(before_drop.assign(new_table_schema))) { return ret; }
+    for (uint64_t id : ids) {
+      ObColumnSchemaV2 *column = new_table_schema.get_column_schema(id);
+      ObSqlString name;
+      ObObj null_value;
+      if (OB_FAIL(ret)) { break; }
+      if (column == nullptr) { ret = OB_ERR_UNEXPECTED; }
+      else if (OB_FAIL(update_prev_id_for_delete_column(before_drop, new_table_schema, *column, trans))) {
+      } else if (OB_FAIL(name.append_fmt("SYS_AI_C%lu$", id))) {
+      } else {
+        column->set_unused();
+        column->set_prev_column_id(id);
+        column->set_next_column_id(id);
+        column->set_nullable(true);
+        column->drop_not_null_cst();
+        column->set_ai_definition_version(0);
+        column->set_ai_state_column_id(OB_INVALID_ID);
+        column->set_ai_request_column_id(OB_INVALID_ID);
+        column->set_ai_result_spec_column_id(OB_INVALID_ID);
+        if (OB_FAIL(column->set_ai_expr(ObString()))) {
+        } else if (OB_FAIL(column->set_ai_normalized_expr(ObString()))) {
+        } else if (OB_FAIL(column->set_ai_dependency_ids(ObString()))) {
+        } else if (OB_FAIL(column->set_column_name(name.string()))) {
+        } else if (OB_FAIL(column->set_cur_default_value(null_value, false))) {
+        } else { ret = update_single_column(trans, before_drop, new_table_schema, *column, true); }
+      }
+    }
+    return ret;
+  }
+  if (OB_FAIL(ret)) {
   } else if (OB_FAIL(new_table_schema.delete_column(column_name))) {
   } else if (OB_FAIL(schema_service->get_table_sql_service().delete_single_column(
       new_schema_version, trans, new_table_schema, *orig_column, false/*need_record_ddl_operation*/))) {
@@ -2829,7 +2934,8 @@ int ObDDLOperator::drop_table(
     const bool delete_priv,
     const bool is_force_drop_lonely_lob_aux_table /*false*/)
 {
-  int ret = OB_SUCCESS;
+  int ret = discard_ai_column_tasks(trans, table_schema);
+  if (OB_FAIL(ret)) { return ret; }
   bool tmp = false;
   if (OB_FAIL(ObDependencyDDLHelper::modify_dep_obj_status(trans, table_schema.get_table_id(),
                                                       *this, schema_service_))) {
@@ -2945,7 +3051,8 @@ int ObDDLOperator::drop_table_to_recyclebin(const ObTableSchema &table_schema,
                                             const ObString *ddl_stmt_str,/*= NULL*/
                                             const bool is_truncate_table)
 {
-  int ret = OB_SUCCESS;
+  int ret = discard_ai_column_tasks(trans, table_schema);
+  if (OB_FAIL(ret)) { return ret; }
   ObSchemaService *schema_service_impl = schema_service_.get_schema_service();
 
   int64_t new_schema_version = OB_INVALID_VERSION;

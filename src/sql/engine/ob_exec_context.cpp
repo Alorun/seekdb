@@ -317,6 +317,7 @@ void ObExecContext::set_runtime_services(const RuntimeServices &services)
 
 ObExecContext::~ObExecContext()
 {
+  ai_column::release_load_schema_barrier(*this);
   if (ai_column_context_ != nullptr) {
     ai_column_context_->~StatementContext();
     ai_column_context_ = nullptr;
@@ -454,6 +455,10 @@ void ObExecContext::reset_op_ctx()
 
 void ObExecContext::reset_op_env()
 {
+  if (ai_column_context_ != nullptr) {
+    ai_column_context_->~StatementContext();
+    ai_column_context_ = nullptr;
+  }
   reset_op_ctx();
   op_kit_store_.reset();
   phy_op_size_ = 0;

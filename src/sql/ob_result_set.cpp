@@ -16,6 +16,9 @@
 
 #define USING_LOG_PREFIX SQL
 #include "ob_result_set.h"
+#include "sql/engine/dml/ai_column_dml.h"
+#include "sql/resolver/cmd/ob_load_data_stmt.h"
+#include "share/schema/ob_multi_version_schema_service.h"
 #include "data_plane/transaction/ob_tx_desc_access.h"
 #include "share/rc/ob_server_runtime.h"
 #include "sql/resolver/dml/ob_del_upd_stmt.h"
@@ -27,6 +30,7 @@
 #include "sql/monitor/show_trace/ob_show_trace.h"
 #include "sql/engine/table/ob_table_scan_op.h"
 #include "share/ob_ddl_checksum.h"
+#include "common/mysqlclient/ob_mysql_proxy.h"
 
 using namespace oceanbase::sql;
 using namespace oceanbase::common;
@@ -255,11 +259,37 @@ int ObResultSet::on_cmd_execute()
   if (OB_ISNULL(cmd_)) {
     ret = OB_ERR_UNEXPECTED;
     LOG_ERROR("invalid inner state", K(cmd_));
-  } else if (cmd_->cause_implicit_commit()) {
-    if (OB_FAIL(implicit_commit_before_cmd_execute(my_session_,
-                                                   get_exec_context(),
-                                                   cmd_->get_cmd_type()))) {
+  } else {
+    if (ObLoadDataStmt *load = dynamic_cast<ObLoadDataStmt *>(cmd_)) {
+      ObSchemaGetterGuard guard;
+      const ObTableSchema *table = nullptr;
+      // Ordinary LOAD commits before executing its batches. Keep AI metadata
+      // stable across that boundary, including a first ADD on an old plan.
+      if (OB_FAIL(ai_column::hold_load_schema_barrier(get_exec_context()))) {
+      } else if (OB_FAIL(GCTX.schema_service_->get_runtime_schema_guard(guard))) {
+      } else if (OB_FAIL(guard.get_table_schema(load->get_load_arguments().table_id_, table))) {
+      } else if (table == nullptr || table->get_schema_version() != load->ai_schema_version_) {
+        ret = OB_SCHEMA_EAGAIN;
+      } else {
+        // Publication may lag the DDL metadata commit. Check the authoritative
+        // committed version as well, before any implicit commit of user work.
+        ObSqlString sql;
+        ObMySQLProxy::MySQLResult result;
+        int64_t version = 0;
+        if (OB_FAIL(sql.append_fmt("SELECT schema_version FROM oceanbase.__all_table WHERE table_id=%lu",
+                                  load->get_load_arguments().table_id_))) {
+        } else if (OB_FAIL(GCTX.sql_proxy_->read(result, sql.ptr()))) {
+        } else if (result.get_result() == nullptr) { ret = OB_ERR_UNEXPECTED;
+        } else if (OB_FAIL(result.get_result()->next())) {
+          if (ret == OB_ITER_END) { ret = OB_SCHEMA_EAGAIN; }
+        } else if (OB_FAIL(result.get_result()->get_int("schema_version", version))) {
+        } else if (version != load->ai_schema_version_) { ret = OB_SCHEMA_EAGAIN; }
+      }
     }
+    if (OB_SUCC(ret) && cmd_->cause_implicit_commit()) {
+      ret = implicit_commit_before_cmd_execute(my_session_, get_exec_context(), cmd_->get_cmd_type());
+    }
+    if (OB_FAIL(ret)) { ai_column::release_load_schema_barrier(get_exec_context()); }
   }
   return ret;
 }
@@ -462,6 +492,8 @@ OB_INLINE int ObResultSet::do_open_plan(ObExecContext &ctx)
 
   if (OB_FAIL(ret)) {
   } else if (OB_FAIL(start_stmt())) {
+  } else if (OB_FAIL(ai_column::schema_fence(ctx))) {
+  } else if (OB_FAIL(ai_column::strict_read_check(ctx))) {
   } else {
     /* Set exec_result_ to the executor's runtime environment for returning data */
     /* execute plan,
@@ -723,7 +755,12 @@ OB_INLINE int ObResultSet::do_close_plan(int errcode, ObExecContext &ctx)
     } else {
       err_ignored = plan_ctx->is_error_ignored();
     }
-    bool rollback = need_rollback(ret, errcode, err_ignored);
+    bool rollback = need_rollback(ret, errcode, err_ignored) || OB_SUCCESS != close_ret;
+    const int ai_ret = ai_column::finish(ctx, rollback);
+    if (OB_SUCCESS != ai_ret) {
+      rollback = true;
+      if (OB_SUCC(ret)) { ret = ai_ret; }
+    }
     get_exec_context().set_errcode(errcode);
     sret = end_stmt(rollback || OB_SUCCESS != pret);
     // SQL_LOG(INFO, "end_stmt err code", K_(errcode), K(ret), K(pret), K(sret));

@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX  SQL_ENG
 
 #include "sql/engine/cmd/ob_load_data_impl.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "share/config/ob_config_helper.h"
 #include "share/rc/ob_server_runtime.h"
 
@@ -864,7 +865,7 @@ int ObLoadDataSPImpl::exec_shuffle(int64_t task_id, ObShuffleTaskHandle *handle)
   return ret;
 }
 
-int ObLoadDataSPImpl::exec_insert(ObInsertTask &task)
+int ObLoadDataSPImpl::exec_insert(ObInsertTask &task, ObExecContext *ai_ctx)
 {
   int ret = OB_SUCCESS;
   int64_t sql_buff_len_init = OB_MALLOC_BIG_BLOCK_SIZE; //2M
@@ -936,7 +937,17 @@ int ObLoadDataSPImpl::exec_insert(ObInsertTask &task)
   param.sql_mode_ = &task.sql_mode_;
   param.tz_info_wrap_ = &task.timezone_;
 
-  if (OB_SUCC(ret) && OB_FAIL(GCTX.sql_proxy_->write(sql_str.string(),
+  if (OB_SUCC(ret) && ai_ctx != nullptr) {
+    ai_column::TxnSqlGuard guard(*ai_ctx);
+    ObSQLSessionInfo *session = ai_ctx->get_my_session();
+    const bool old_load = session->is_load_data_exec_session();
+    session->set_load_data_exec_session(true);
+    if (OB_FAIL(guard.open())) {
+    } else { ret = guard.write(sql_str.string(), affected_rows); }
+    const int close_ret = guard.close();
+    session->set_load_data_exec_session(old_load);
+    if (OB_SUCC(ret)) { ret = close_ret; }
+  } else if (OB_SUCC(ret) && OB_FAIL(GCTX.sql_proxy_->write(sql_str.string(),
                                                      affected_rows,
                                                      &param))) {
   }
@@ -1187,7 +1198,7 @@ int ObLoadDataSPImpl::execute_insert_task(ObExecContext &ctx,
     // buffer. Keep the same isolation after executing the task synchronously so
     // successful inner inserts do not leak warnings to the LOAD DATA statement.
     ObWarningBufferIgnoreScope ignore_internal_insert_warnings;
-    result.exec_ret_ = exec_insert(insert_task);
+    result.exec_ret_ = exec_insert(insert_task, ai_transactional_ ? &ctx : nullptr);
     if (OB_SUCCESS != result.exec_ret_) {
       ObWarningBuffer *warning_buf = ob_get_tsi_warning_buffer();
       if (OB_NOT_NULL(warning_buf)) {
@@ -1284,6 +1295,7 @@ int ObLoadDataSPImpl::process_insert_tasks(ObExecContext &ctx, ToolBox &box)
 int ObLoadDataSPImpl::execute(ObExecContext &ctx, ObLoadDataStmt &load_stmt)
 {
   int ret = OB_SUCCESS;
+  ai_transactional_ = load_stmt.ai_transactional_load_;
 
   HEAP_VAR(ToolBox, box) {
     //init toolbox

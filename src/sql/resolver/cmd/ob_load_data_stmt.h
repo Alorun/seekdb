@@ -243,7 +243,9 @@ public:
   {
   }
   //let previous transaction commit first
-  virtual bool cause_implicit_commit() const { return true; }
+  virtual bool cause_implicit_commit() const { return !ai_transactional_load_; }
+  bool ai_transactional_load_ = false;
+  int64_t ai_schema_version_ = 0;
 
   int add_assignment(ObAssignment& assign) { return assignments_.push_back(assign); }
   const ObAssignments& get_table_assignment() const { return assignments_; }

@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_ENG
+#include "sql/engine/dml/ai_column_dml.h"
 #include "config_bridge.h"
 #include "sql/engine/dml/ob_dml_service.h"
 #include "sql/engine/expr/ob_datum_cast.h"
@@ -621,6 +622,7 @@ int ObDMLService::process_insert_row(const ObInsCtDef &ins_ctdef,
         dml_op, ins_ctdef.das_base_ctdef_, ins_ctdef.trig_ctdef_, ins_rtdef.trig_rtdef_))) {
     }
     if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(ai_column::prepare(ins_ctdef, dml_op))) {
     } else if (OB_FAIL(check_row_null(ins_ctdef.new_row_,
                                       dml_op.get_eval_ctx(),
                                       ins_rtdef.cur_row_num_,
@@ -730,6 +732,7 @@ int ObDMLService::process_delete_row(const ObDelCtDef &del_ctdef,
           dml_op, del_ctdef.das_base_ctdef_, del_ctdef.trig_ctdef_, del_rtdef.trig_rtdef_))) {
       }
     }
+    if (OB_SUCC(ret) && !is_skipped) { ret = ai_column::collect(del_ctdef, dml_op, true); }
     LOG_DEBUG("process delete row", K(ret), K(is_skipped),
                "old_row", ROWEXPR2STR(dml_op.get_eval_ctx(), del_ctdef.old_row_));
   }
@@ -793,6 +796,7 @@ int ObDMLService::process_update_row(const ObUpdCtDef &upd_ctdef,
           dml_op, upd_ctdef.das_base_ctdef_, upd_ctdef.trig_ctdef_, upd_rtdef.trig_rtdef_))) {
       }
       if (OB_FAIL(ret)) {
+      } else if (OB_FAIL(ai_column::prepare(upd_ctdef, dml_op))) {
       } else if (OB_FAIL(check_row_null(upd_ctdef.new_row_,
                                         dml_op.get_eval_ctx(),
                                         upd_rtdef.cur_row_num_,
@@ -847,6 +851,7 @@ int ObDMLService::insert_row(const ObInsCtDef &ins_ctdef,
                                         ins_ctdef.new_row_,
                                         ins_ctdef,
                                         ins_rtdef))) {
+  } else if (OB_FAIL(ai_column::materialize(ins_ctdef, dml_rtctx.get_exec_ctx(), dml_rtctx.get_eval_ctx()))) {
   } else if (OB_FAIL(insert_row(ins_ctdef.das_ctdef_,
                                 ins_rtdef.das_rtdef_,
                                 tablet_loc,
@@ -1017,6 +1022,7 @@ int ObDMLService::update_row(const ObUpdCtDef &upd_ctdef,
                                                upd_ctdef.new_row_,
                                                upd_ctdef,
                                                upd_rtdef))) {
+  } else if (OB_FAIL(ai_column::materialize(upd_ctdef, dml_rtctx.get_exec_ctx(), dml_rtctx.get_eval_ctx()))) {
   } else if (OB_UNLIKELY(!upd_rtdef.is_row_changed_)) {
     //old row is equal to new row, only need to lock row
     if (OB_ISNULL(upd_rtdef.dlock_rtdef_)) {

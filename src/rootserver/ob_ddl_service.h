@@ -2070,6 +2070,7 @@ public:
                         enable_check_newest_schema_(enable_check_newest_schema)
                         {}
   virtual ~ObDDLSQLTransaction();
+  int hold_ai_schema_barrier();
 
 public:
   // If you commit the transaction, you need to write a line in ddl_operation once, the mark of end
@@ -2112,6 +2113,7 @@ private:
 
   // default true to check newest schema; daily major set false not check just use schema from inner table
   bool enable_check_newest_schema_;
+  bool ai_schema_barrier_held_ = false;
 };
 // Fill in the partition name and the high values of the last partition
 template<typename SCHEMA, typename ALTER_SCHEMA>

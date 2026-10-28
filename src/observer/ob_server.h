@@ -18,6 +18,7 @@
 #define _OCEABASE_OBSERVER_OB_SERVER_H_
 
 #ifndef _WIN32
+#include "observer/ai_service/ai_column_service.h"
 #include <sys/statvfs.h>
 #endif
 #include "lib/net/ob_net_util.h"
@@ -754,6 +755,7 @@ private:
   rootserver::ObSystemPackageLoadService * mods_system_package_load_service_ = nullptr;
   rootserver::ObDDLScheduler * mods_ddl_scheduler_ = nullptr;
   omt::ObAiService * mods_ai_service_ = nullptr;
+  AiColumnService ai_column_service_;
   share::ObChangeStreamMgr * mods_change_stream_mgr_ = nullptr;
   ObLSRuntimeAdapter ls_runtime_adapter_;
 }; // end of class ObServer

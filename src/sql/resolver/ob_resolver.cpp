@@ -298,6 +298,7 @@ int ObResolver::resolve(IsPrepared if_prepared, const ParseNode &parse_tree, ObS
         REGISTER_STMT_RESOLVER(Insert);
         break;
       }
+      case T_AI_COLUMN_RETRY:
       case T_UPDATE: {
         REGISTER_STMT_RESOLVER(Update);
         break;
@@ -457,6 +458,7 @@ int ObResolver::resolve(IsPrepared if_prepared, const ParseNode &parse_tree, ObS
       case T_SHOW_TABLES:
       case T_SHOW_DATABASES:
       case T_SHOW_VARIABLES:
+      case T_SHOW_AI_COLUMNS:
       case T_SHOW_COLUMNS:
       case T_SHOW_SCHEMA:
       case T_SHOW_CREATE_DATABASE:

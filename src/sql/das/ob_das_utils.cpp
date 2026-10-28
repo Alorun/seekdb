@@ -42,6 +42,10 @@ int ObDASUtils::check_nested_sql_mutating(ObTableID ref_table_id, ObExecContext 
   //only this sql(trigger or pl udf) needs to check mutating
   if (OB_ISNULL(cur_parent_ctx)) {
     //do nothing
+  } else if (cur_parent_ctx->ai_column_internal_sql()) {
+    // A bounded kernel maintenance scope may inspect the final own writes.
+    // This flag is never inherited by SQL started from a business trigger.
+    cur_parent_ctx = nullptr;
   } else if (cur_parent_ctx->get_das_ctx().is_fk_cascading_) {
     cur_parent_ctx = nullptr;
   } else if (OB_ISNULL(cur_parent_ctx->get_pl_stack_ctx())) {

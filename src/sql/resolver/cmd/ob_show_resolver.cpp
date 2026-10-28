@@ -149,6 +149,7 @@ int ObShowResolver::resolve(const ParseNode &parse_tree)
             && OB_UNLIKELY(parse_tree.type_ != T_SHOW_PROFILE)
             && OB_UNLIKELY(parse_tree.type_ != T_SHOW_ENGINE)
             && OB_UNLIKELY(parse_tree.type_ != T_SHOW_OPEN_TABLES)
+            && OB_UNLIKELY(parse_tree.type_ != T_SHOW_AI_COLUMNS)
             && OB_UNLIKELY(parse_tree.type_ != T_SHOW_CREATE_USER)
             && OB_UNLIKELY(parse_tree.type_ != T_SHOW_CHECK_TABLE)) {
     ret = OB_ERR_UNEXPECTED;
@@ -361,6 +362,52 @@ int ObShowResolver::resolve(const ParseNode &parse_tree)
             }
           }
         }();
+        break;
+      }
+      case T_SHOW_AI_COLUMNS: {
+        ObString show_db_name, show_table_name;
+        uint64_t show_db_id = OB_INVALID_ID, show_table_id = OB_INVALID_ID;
+        bool is_view = false;
+        if (parse_tree.num_child_ != 2 || parse_tree.children_ == nullptr) { ret = OB_ERR_UNEXPECTED; }
+        else if (OB_FAIL(resolve_show_from_table(parse_tree.children_[0], nullptr, database_name.empty(),
+                      T_SHOW_COLUMNS, real_id, show_db_name, show_db_id, show_table_name, show_table_id, is_view))) {
+        } else if (OB_FAIL(schema_checker_->check_db_access(session_priv, enable_role_id_array, show_db_name))) {
+        } else if (is_view) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "SHOW AI COLUMNS on a view");
+        } else {
+          show_resv_ctx.stmt_type_ = stmt::T_SHOW_COLUMNS;
+          show_resv_ctx.condition_node_ = parse_tree.children_[1];
+          show_resv_ctx.like_column_ = "Field";
+          const ObTableSchema *definition = nullptr;
+          ObSqlString dependencies;
+          if (OB_FAIL(schema_checker_->get_table_schema(show_table_id, definition))) {
+          } else if (definition == nullptr) { ret = OB_TABLE_NOT_EXIST;
+          } else { ret = dependencies.append("CASE WHEN 0 THEN '[]'"); }
+          for (int64_t i = 0; OB_SUCC(ret) && i < definition->get_column_count(); ++i) {
+            const ObColumnSchemaV2 *column = definition->get_column_schema_by_idx(i);
+            if (column == nullptr || !column->is_ai_column()) { continue; }
+            ObSEArray<uint64_t, 8> ids;
+            if (OB_FAIL(column->get_ai_dependencies(ids))) {
+            } else { ret = dependencies.append_fmt(" WHEN a.column_id=%lu THEN '[", column->get_column_id()); }
+            for (int64_t d = 0; OB_SUCC(ret) && d < ids.count(); ++d) {
+              ret = dependencies.append_fmt("%s%lu", d == 0 ? "" : ",", ids.at(d));
+            }
+            if (OB_SUCC(ret)) { ret = dependencies.append("]'"); }
+          }
+          if (OB_SUCC(ret)) { ret = dependencies.append(" ELSE '[]' END"); }
+          if (OB_FAIL(ret)) {
+          } else if (OB_FAIL(sql_gen.init(params_.allocator_))) {
+          } else if (OB_FAIL(sql_gen.gen_select_str(nullptr))) {
+          } else if (OB_FAIL(sql_gen.gen_from_str(
+              "SELECT v.field AS Field,v.type AS Type,a.original_expr AS Expression,"
+              "%s AS Dependencies,a.sync_mode AS Sync_mode,"
+              "a.max_retries AS Max_retries,a.definition_version AS Definition_version "
+              "FROM oceanbase.__all_ai_column a JOIN oceanbase.__all_virtual_table_column v "
+              "ON a.table_id=v.table_id AND a.column_name=v.field "
+              "WHERE a.table_id=%lu AND v.table_id=%lu ORDER BY a.column_id", dependencies.ptr(), show_table_id, show_table_id))) {
+          } else { sql_gen.assign_sql_str(select_sql); }
+        }
         break;
       }
       case T_SHOW_COLUMNS: {
@@ -1806,6 +1853,7 @@ int ObShowResolver::resolve_like_or_where_clause(ObShowResolverContext &ctx)
                  && parse_tree->type_ != T_SHOW_COLLATION
                  && parse_tree->type_ != T_SHOW_TRACE
                  && parse_tree->type_ != T_SHOW_COLUMNS
+                 && parse_tree->type_ != T_SHOW_AI_COLUMNS
                  && parse_tree->type_ != T_SHOW_TABLE_STATUS
                  && parse_tree->type_ != T_SHOW_INDEXES
                  && parse_tree->type_ != T_SHOW_PARAMETERS

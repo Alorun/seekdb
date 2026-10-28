@@ -2168,7 +2168,6 @@ int ObDDLResolver::resolve_ai_column_expr(ObResolverParams &params,
     } else if (base->is_ai_column() || base->is_generated_column()
                || base->get_column_name_str().case_compare(column.get_column_name_str()) == 0) {
       ret = OB_NOT_SUPPORTED;
-      LOG_USER_ERROR(OB_NOT_SUPPORTED, "AI COLUMN dependencies on generated or AI columns");
     } else if (OB_FAIL(ObRawExprUtils::init_column_expr(*base, params.session_info_, *name.ref_expr_))) {
     } else if (!has_exist_in_array(dependencies, base->get_column_id())) {
       ret = dependencies.push_back(base->get_column_id());

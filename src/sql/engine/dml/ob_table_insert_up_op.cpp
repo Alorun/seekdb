@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_ENG
+#include "sql/engine/dml/ai_column_dml.h"
 
 #include "ob_table_insert_up_op.h"
 #include "data_plane/blocksstable/ob_datum_row.h"
@@ -710,6 +711,7 @@ int ObTableInsertUpOp::insert_one_upd_new_row_das(const ObUpdCtDef &upd_ctdef,
                                                              upd_ctdef.new_row_,
                                                              upd_ctdef,
                                                              upd_rtdef))) {
+  } else if (OB_FAIL(ai_column::materialize(upd_ctdef, ctx_, eval_ctx_))) {
   } else if (OB_FAIL(ObDMLService::insert_row(*upd_ctdef.dins_ctdef_,
                                               *upd_rtdef.dins_rtdef_,
                                               tablet_loc,

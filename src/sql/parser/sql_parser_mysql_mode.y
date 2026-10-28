@@ -306,7 +306,7 @@ END_P SET_VAR DELIMITER
         LIST_ LISTAGG LOB_INROW_THRESHOLD LOCAL LOCATION LOCKED LOCKS LOGFILE LOGS LOCK_
         LOGICAL_READS LEVEL LN LOG LINK LS LINE_DELIMITER
 
-        MAJOR MAP MANHATTAN MANUAL MASTER MASTER_AUTO_POSITION MASTER_CONNECT_RETRY MASTER_DELAY MASTER_HEARTBEAT_PERIOD
+        RETRY MAJOR MAP MANHATTAN MANUAL MASTER MASTER_AUTO_POSITION MASTER_CONNECT_RETRY MASTER_DELAY MASTER_HEARTBEAT_PERIOD
         MASTER_HOST MASTER_LOG_FILE MASTER_LOG_POS MASTER_PASSWORD MASTER_PORT MASTER_RETRY_COUNT
         MASTER_SERVER_ID MASTER_SSL MASTER_SSL_CA MASTER_SSL_CAPATH MASTER_SSL_CERT MASTER_SSL_CIPHER
         MASTER_SSL_CRL MASTER_SSL_CRLPATH MASTER_SSL_KEY MASTER_USER MAX MAX_CONNECTIONS_PER_HOUR
@@ -12677,6 +12677,11 @@ SHOW opt_extended_or_full TABLES opt_from_or_in_database_clause opt_show_conditi
   //(void)$3;
   malloc_non_terminal_node($$, result->malloc_pool_, T_SHOW_DATABASES, 2, $4, $3);
 }
+| SHOW AI COLUMNS from_or_in relation_factor opt_show_condition
+{
+  (void)$4;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_SHOW_AI_COLUMNS, 2, $5, $6);
+}
 | SHOW opt_extended_or_full columns_or_fields from_or_in relation_factor opt_from_or_in_database_clause opt_show_condition
 {
   (void)$3;
@@ -14698,6 +14703,11 @@ alter_with_opt_hint TABLE relation_factor alter_table_actions
   merge_nodes(table_actions, result, T_ALTER_TABLE_ACTION_LIST, $4);
   malloc_non_terminal_node($$, result->malloc_pool_, T_ALTER_TABLE, 4, $3, table_actions, NULL, $1);
   $$->value_ = 0;
+  if (table_actions->num_child_ == 1 && table_actions->children_[0]->type_ == T_AI_COLUMN_RETRY) {
+    ParseNode *action = table_actions->children_[0];
+    malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 3,
+                             $3, action->children_[0], action->children_[1]);
+  }
 }
 ;
 
@@ -14731,7 +14741,11 @@ alter_table_action
 ;
 
 alter_table_action:
-opt_set table_option_list_space_seperated
+RETRY AI COLUMN column_name opt_where
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 2, $4, $5);
+}
+| opt_set table_option_list_space_seperated
 {
   (void)$1;
   merge_nodes($$, result, T_TABLE_OPTION_LIST, $2);
@@ -18064,6 +18078,7 @@ ACCOUNT
 |       REPEATABLE
 |       REPLICATION
 |       RESET
+|       RETRY
 |       RESPECT
 |       RESTART
 |       RESTORE

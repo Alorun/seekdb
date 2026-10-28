@@ -23,6 +23,7 @@
 #include "share/ob_sys_time_zone_util.h"
 
 #include "ob_ddl_service.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "rootserver/ob_runtime_ddl_service.h"
 #include "query/session/ob_inner_sql_connection_access.h"
 #include "share/ob_ddl_common.h"
@@ -7833,6 +7834,12 @@ int ObDDLService::add_new_column_to_table_schema(
                 new_table_schema, alter_column_schema))) {
         }
         if (OB_SUCC(ret) && alter_column_schema.is_ai_column()) {
+          ObColumnSchemaV2 *runtime_column = new_table_schema.get_column_schema(alter_column_schema.get_column_id());
+          if (runtime_column == nullptr) { ret = OB_ERR_UNEXPECTED; }
+          else {
+            runtime_column->set_ai_definition_version(alter_column_schema.get_ai_definition_version());
+            runtime_column->set_schema_version(alter_column_schema.get_schema_version());
+          }
           const uint64_t hidden_ids[] = {alter_column_schema.get_ai_state_column_id(),
               alter_column_schema.get_ai_request_column_id(), alter_column_schema.get_ai_result_spec_column_id()};
           for (int64_t i = 0; OB_SUCC(ret) && i < 3; ++i) {
@@ -21900,12 +21907,25 @@ int ObDDLService::get_database_id(ObSchemaGetterGuard &schema_guard,
   return ret;
 }
 
+int ObDDLSQLTransaction::hold_ai_schema_barrier()
+{
+  if (!ai_schema_barrier_held_) {
+    if (!sql::ai_column::try_hold_ddl_schema_barrier()) { return OB_SCHEMA_EAGAIN; }
+    ai_schema_barrier_held_ = true;
+  }
+  return OB_SUCCESS;
+}
+
 ObDDLSQLTransaction::~ObDDLSQLTransaction()
 {
   if (is_started()) {
     int ret = end(false);
     if (OB_FAIL(ret)) {
     }
+  }
+  if (ai_schema_barrier_held_) {
+    sql::ai_column::release_ddl_schema_barrier();
+    ai_schema_barrier_held_ = false;
   }
 }
 
@@ -22522,6 +22542,13 @@ int ObDDLService::drop_column_online(
                     origin_table_schema.get_table_name_str().ptr());
   } else if (OB_FAIL(ddl_operator.update_prev_id_for_delete_column(
                 origin_table_schema, new_table_schema, *orig_column_schema, trans))) {
+  } else if (orig_column_schema->is_ai_column()) {
+    // AI result columns are nullable stored values without defaults or PKs.
+    // Remove their metadata and hidden state together rather than retaining an
+    // unused column that would still look like a live AI definition to DML.
+    int64_t version = OB_INVALID_VERSION;
+    if (OB_FAIL(schema_service_->gen_new_schema_version(version))) {
+    } else { ret = ddl_operator.delete_single_column(trans, version, new_table_schema, origin_column_name); }
   } else {
     char new_col_name[OB_MAX_COLUMN_NAME_BUF_LENGTH] = {0};
     ObObj default_value;

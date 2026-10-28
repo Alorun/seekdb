@@ -24,6 +24,7 @@
 #include "share/rc/ob_server_runtime.h"
 
 #include "share/ob_global_stat_proxy.h"
+#include "share/ob_core_table_proxy.h"
 #include "rootserver/ob_table_creator.h"
 #include "rootserver/ob_local_management_service.h"
 #include "share/inner_table/ob_load_inner_table_schema.h"
@@ -475,7 +476,7 @@ int ObBootstrap::install_ai_column_inner_schema()
   ObMultiVersionSchemaService &schema_service = ddl_service_.get_schema_service();
   ObDDLOperator ddl_operator(schema_service, proxy);
   const uint64_t feature_ids[] = {1131, 1132, 1135, 51131, 51132, 51135,
-                                  61131, 61132, 61135, 102060, 102061, 102062};
+                                  61131, 61132, 61135, 102060, 102061, 102062, 21665};
   auto read_ids = [&](const char *sql, const char *field, ObIArray<uint64_t> &ids) -> int {
     int status = OB_SUCCESS;
     ObMySQLProxy::MySQLResult result;
@@ -484,9 +485,10 @@ int ObBootstrap::install_ai_column_inner_schema()
     else {
       sqlclient::ObMySQLResult *rows = result.get_result();
       while (OB_SUCCESS == (status = rows->next())) {
-        uint64_t value = 0;
-        if (OB_SUCCESS != (status = rows->get_uint(field, value)) ||
-            OB_SUCCESS != (status = ids.push_back(value))) { break; }
+        int64_t value = 0;
+        if (OB_SUCCESS != (status = rows->get_int(field, value))) { break; }
+        if (value < 0) { status = OB_INVALID_DATA; break; }
+        if (OB_SUCCESS != (status = ids.push_back(static_cast<uint64_t>(value)))) { break; }
       }
       if (status == OB_ITER_END) { status = OB_SUCCESS; }
     }
@@ -500,14 +502,8 @@ int ObBootstrap::install_ai_column_inner_schema()
   ObDDLSQLTransaction trans(&schema_service, true, true, false, false, false);
   if (OB_SUCC(ret) && OB_FAIL(trans.start(&proxy, version))) {
   }
-  common::hash::ObHashMap<uint64_t, const ObTableSchema *> by_id;
-  if (OB_SUCC(ret) && OB_FAIL(by_id.create(hash::cal_next_prime(desired.count()), "AiInnerIds"))) {
-  }
-  for (int64_t i = 0; OB_SUCC(ret) && i < desired.count(); ++i) {
-    if (OB_FAIL(by_id.set_refactored(desired.at(i).get_table_id(), &desired.at(i)))) {
-    }
-  }
   ObTableCreator creator(SCN::base_scn(), trans);
+  bool has_new_tablets = false;
   if (OB_SUCC(ret) && OB_FAIL(creator.init(false))) {
   }
   for (int64_t i = 0; OB_SUCC(ret) && i < desired.count(); ++i) {
@@ -516,39 +512,73 @@ int ObBootstrap::install_ai_column_inner_schema()
     bool feature = false;
     for (const uint64_t id : feature_ids) { feature = feature || tid == id; }
     if (feature && !has_exist_in_array(existing, tid)) {
-      // The base table creates its indexes and both LOB tablets together.
-      if ((tid == 1131 || tid == 1132 || tid == 1135) &&
-          OB_FAIL(prepare_create_partitions(creator, table, by_id))) {
-      } else if (OB_FAIL(ddl_operator.create_table(table, trans, nullptr,
+      // Prepare each missing physical table independently. An old instance
+      // may already have the base table but be missing an index or LOB table.
+      if (table.has_partition()) {
+        ObArray<const ObTableSchema *> tables;
+        ObArray<bool> empty_majors;
+        if (OB_FAIL(tables.push_back(&table))) {
+        } else if (OB_FAIL(empty_majors.push_back(true))) {
+        } else if (OB_FAIL(creator.add_create_tablets_of_tables_arg(tables, DATA_CURRENT_VERSION, empty_majors))) {
+        } else { has_new_tablets = true; }
+      }
+      if (OB_SUCC(ret) && OB_FAIL(ddl_operator.create_table(table, trans, nullptr,
                        !ObSysTableChecker::is_sys_table_index_tid(tid) && !is_sys_lob_table(tid), false))) {
-      } else if (OB_FAIL(installed.push_back(table))) {
+      } else if (OB_SUCC(ret) && OB_FAIL(installed.push_back(table))) {
       }
     }
-    if (OB_SUCC(ret) && (tid == OB_ALL_COLUMN_TID || tid == OB_ALL_COLUMN_HISTORY_TID)) {
+    const bool column_metadata = tid == OB_ALL_COLUMN_TID || tid == OB_ALL_COLUMN_HISTORY_TID;
+    const bool outbox = tid == 1131 || tid == 1132 || tid == 1135 || (tid >= 102060 && tid <= 102062);
+    if (OB_SUCC(ret) && (column_metadata || (outbox && has_exist_in_array(existing, tid)))) {
       ObArray<uint64_t> column_ids;
       ObSqlString query;
-      if (OB_FAIL(query.append_fmt("SELECT column_id FROM oceanbase.__all_column WHERE table_id=%lu", tid))) {
+      const ObTableSchema *persisted = nullptr;
+      if (outbox && OB_FAIL(guard.get_table_schema(tid, persisted))) { break; }
+      if (is_core_table(tid)) {
+        // Core column definitions are stored as history records in the core
+        // KV table. There is no current-record copy in physical __all_column.
+        ObCoreTableProxy core(OB_ALL_COLUMN_HISTORY_TNAME, proxy);
+        if (OB_FAIL(core.load())) {
+        } else {
+          int next = OB_SUCCESS;
+          while (OB_SUCC(ret) && OB_SUCCESS == (next = core.next())) {
+            int64_t owner = 0, cid = 0;
+            if (OB_FAIL(core.get_int("table_id", owner))) {
+            } else if (owner == tid) {
+              if (OB_FAIL(core.get_int("column_id", cid))) {
+              } else if (cid < 0) { ret = OB_INVALID_DATA;
+              } else { ret = column_ids.push_back(static_cast<uint64_t>(cid)); }
+            }
+          }
+          if (OB_SUCC(ret) && next != OB_ITER_END) { ret = next; }
+        }
+      } else if (OB_FAIL(query.append_fmt("SELECT column_id FROM oceanbase.__all_column WHERE table_id=%lu", tid))) {
       } else if (OB_FAIL(read_ids(query.ptr(), "column_id", column_ids))) {
       }
       bool changed = false;
       for (ObTableSchema::const_column_iterator it = table.column_begin();
            OB_SUCC(ret) && it != table.column_end(); ++it) {
         ObColumnSchemaV2 *column = *it;
-        if (column != nullptr && column->get_column_name_str().prefix_match("ai_") &&
+        if (column != nullptr && (!column_metadata || column->get_column_name_str().prefix_match("ai_")) &&
             !has_exist_in_array(column_ids, column->get_column_id())) {
           if (OB_FAIL(ddl_operator.insert_single_column(trans, table, *column))) {
           } else { changed = true; table.set_schema_version(column->get_schema_version()); }
+        } else if (column != nullptr && outbox && persisted != nullptr) {
+          const ObColumnSchemaV2 *old_column = persisted->get_column_schema(column->get_column_id());
+          if (old_column != nullptr && old_column->is_nullable() != column->is_nullable()) {
+            if (OB_FAIL(ddl_operator.update_single_column(trans, *persisted, table, *column, false))) {
+            } else { changed = true; table.set_schema_version(column->get_schema_version()); }
+          }
         }
       }
       if (OB_SUCC(ret) && changed) {
-        if (OB_FAIL(schema_service.get_schema_service()->get_table_sql_service().update_table_attribute(
-                     trans, table, OB_DDL_ALTER_TABLE, false))) {
+        if (OB_FAIL(ddl_operator.update_table_attribute(table, trans, OB_DDL_ALTER_TABLE))) {
         } else if (OB_FAIL(installed.push_back(table))) {
         }
       }
     }
   }
-  if (OB_SUCC(ret) && installed.count() > 0 && OB_FAIL(creator.execute())) {
+  if (OB_SUCC(ret) && has_new_tablets && OB_FAIL(creator.execute())) {
   }
   if (trans.is_started()) {
     const int tmp_ret = trans.end(OB_SUCC(ret));
@@ -557,13 +587,61 @@ int ObBootstrap::install_ai_column_inner_schema()
   if (OB_SUCC(ret) && installed.count() > 0 &&
       OB_FAIL(schema_service.broadcast_runtime_schema(installed))) {
   }
+  // Pin legacy definitions before accepting writes. A fallback to the column's
+  // schema version must not change when an unrelated attribute is updated.
+  ObArray<uint64_t> legacy_tables;
+  if (OB_SUCC(ret) && OB_FAIL(read_ids("SELECT DISTINCT table_id FROM oceanbase.__all_column "
+        "WHERE ai_expr IS NOT NULL AND ai_expr<>'' AND (ai_definition_version IS NULL OR ai_definition_version<=0)",
+        "table_id", legacy_tables))) {
+  }
+  if (OB_SUCC(ret) && !legacy_tables.empty()) {
+    ObSchemaGetterGuard current_guard;
+    ObDDLSQLTransaction migration(&schema_service, true, true, false, false, false);
+    installed.reuse();
+    if (OB_FAIL(schema_service.get_runtime_schema_guard(current_guard))) {
+    } else if (OB_FAIL(current_guard.get_schema_version(version))) {
+    } else { ret = migration.start(&proxy, version); }
+    for (int64_t i = 0; OB_SUCC(ret) && i < legacy_tables.count(); ++i) {
+      const ObTableSchema *source = nullptr;
+      ObTableSchema table;
+      if (OB_FAIL(current_guard.get_table_schema(legacy_tables.at(i), source))) {
+      } else if (source == nullptr) { ret = OB_SCHEMA_EAGAIN;
+      } else { ret = table.assign(*source); }
+      for (ObTableSchema::const_column_iterator it = table.column_begin();
+           OB_SUCC(ret) && it != table.column_end(); ++it) {
+        ObColumnSchemaV2 *column = *it;
+        if (column != nullptr && column->is_ai_column()) {
+          column->set_ai_definition_version(column->get_ai_definition_version());
+          if (OB_FAIL(ddl_operator.update_single_column(migration, *source, table, *column, false))) {
+          } else { table.set_schema_version(MAX(table.get_schema_version(), column->get_schema_version())); }
+        }
+      }
+      if (OB_SUCC(ret) && OB_FAIL(ddl_operator.update_table_attribute(table, migration, OB_DDL_ALTER_TABLE))) {
+      } else if (OB_SUCC(ret)) { ret = installed.push_back(table); }
+    }
+    if (migration.is_started()) {
+      const int end_ret = migration.end(OB_SUCC(ret));
+      if (OB_SUCC(ret)) { ret = end_ret; }
+    }
+    if (OB_SUCC(ret)) { ret = schema_service.broadcast_runtime_schema(installed); }
+  }
   if (OB_SUCC(ret)) {
     int64_t affected = 0;
     ret = proxy.write("INSERT IGNORE INTO oceanbase.__all_ai_column_control "
                       "(table_id,column_id,definition_version,kind,state,format_version) "
                       "VALUES (0,0,1,0,1,1)", affected);
   }
-  LOG_INFO("AI column inner schema installation completed", K(ret), K(installed.count()));
+  if (OB_SUCC(ret)) {
+    int64_t affected = 0;
+    ret = proxy.write("INSERT IGNORE INTO oceanbase.__all_ai_column_control "
+        "(table_id,column_id,definition_version,kind,ddl_schema_version,state,eligible_ts,format_version) "
+        "SELECT c.table_id,c.column_id,CASE WHEN c.ai_definition_version>0 THEN c.ai_definition_version ELSE c.schema_version END,"
+        "1,t.schema_version,0,NOW(6),1 FROM oceanbase.__all_column c "
+        "JOIN oceanbase.__all_table t ON c.table_id=t.table_id "
+        "WHERE c.is_hidden=0 AND c.ai_expr IS NOT NULL AND c.ai_expr<>''", affected);
+  }
+  if (OB_FAIL(ret)) { FLOG_ERROR("AI column inner schema installation failed", K(ret), K(installed.count())); }
+  else { LOG_INFO("AI column inner schema installation completed", K(ret), K(installed.count())); }
   return ret;
 }
 

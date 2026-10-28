@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX SQL
 #include "config_bridge.h"
 #include "sql/ob_sql.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "lib/json/ob_json_print_utils.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "query/runtime/ob_query_runtime_environment.h"
@@ -2678,6 +2679,9 @@ int ObSql::transform_stmt(ObSqlSchemaGuard *sql_schema_guard,
     if (transform_stmt->is_dml_write_stmt()) {
       need_transform = false;
     }
+  }
+  if (OB_SUCC(ret) && phy_plan != nullptr && !stmt->is_explain_stmt() &&
+      OB_FAIL(ai_column::collect_read_refs(*transform_stmt, *sql_schema_guard->get_schema_guard(), *phy_plan))) {
   }
   if (OB_SUCC(ret) && need_transform) {
     ObTransformerImpl transformer(&trans_ctx);

@@ -34,9 +34,26 @@ ObUpdateResolver::~ObUpdateResolver()
 {
 }
 
-int ObUpdateResolver::resolve(const ParseNode &parse_tree)
+int ObUpdateResolver::resolve(const ParseNode &input_tree)
 {
   int ret = OB_SUCCESS;
+  const bool ai_retry = input_tree.type_ == T_AI_COLUMN_RETRY;
+  ParseNode lowered = {};
+  ParseNode tables = {};
+  ParseNode *children[11] = {};
+  ParseNode *table_children[1] = {};
+  if (ai_retry) {
+    if (input_tree.num_child_ != 3 || input_tree.children_ == nullptr
+        || input_tree.children_[0] == nullptr || input_tree.children_[1] == nullptr) {
+      return OB_ERR_UNEXPECTED;
+    }
+    lowered.type_ = T_UPDATE; lowered.num_child_ = 11; lowered.children_ = children;
+    tables.type_ = T_TABLE_REFERENCES; tables.num_child_ = 1; tables.children_ = table_children;
+    table_children[0] = input_tree.children_[0];
+    children[TABLE] = &tables;
+    children[WHERE] = input_tree.children_[2];
+  }
+  const ParseNode &parse_tree = ai_retry ? lowered : input_tree;
   ObUpdateStmt *update_stmt = NULL;
   ObSEArray<ObTableAssignment, 2> tables_assign;
   if (T_UPDATE != parse_tree.type_
@@ -81,7 +98,32 @@ int ObUpdateResolver::resolve(const ParseNode &parse_tree)
     current_scope_ = T_UPDATE_SCOPE;
     // resolve assignments
     ParseNode *assign_list = parse_tree.children_[UPDATE_LIST];
-    if (OB_ISNULL(assign_list) || OB_UNLIKELY(T_ASSIGN_LIST != assign_list->type_)) {
+    if (ai_retry) {
+      const TableItem *item = update_stmt->get_table_items().count() == 1
+          ? update_stmt->get_table_items().at(0) : nullptr;
+      const ObTableSchema *schema = nullptr;
+      const ParseNode *name = input_tree.children_[1];
+      if (item == nullptr || !item->is_basic_table()) { ret = OB_NOT_SUPPORTED; }
+      else if (OB_FAIL(schema_checker_->get_table_schema(item->ref_id_, schema))) {
+      } else if (schema == nullptr) { ret = OB_TABLE_NOT_EXIST; }
+      else {
+        const ObColumnSchemaV2 *column = schema->get_column_schema(ObString(name->str_len_, name->str_value_));
+        if (column == nullptr || !column->is_ai_column()) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "retrying a column that is not an AI column");
+        } else {
+          ObSEArray<ColumnItem, 32> resolved_columns;
+          ret = resolve_all_basic_table_columns(*item, true, &resolved_columns);
+        }
+        if (OB_FAIL(ret)) {
+        } else {
+          update_stmt->ai_retry_column_id_ = column->get_column_id();
+          ObTableAssignment assignment;
+          assignment.table_id_ = item->table_id_;
+          ret = tables_assign.push_back(assignment);
+        }
+      }
+    } else if (OB_ISNULL(assign_list) || OB_UNLIKELY(T_ASSIGN_LIST != assign_list->type_)) {
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("invalid assign list node", K(assign_list));
     } else if (OB_FAIL(resolve_assignments(*assign_list,
@@ -149,6 +191,47 @@ int ObUpdateResolver::resolve(const ParseNode &parse_tree)
     } else if (OB_FAIL(update_stmt->check_dml_source_from_join())) {
     } else if (OB_FAIL(check_safe_update_mode(update_stmt))) {
     } else { /*do nothing*/ }
+  }
+  return ret;
+}
+
+int ObUpdateResolver::resolve_column_ref_expr(const ObQualifiedName &name, ObRawExpr *&expr)
+{
+  int ret = OB_SUCCESS;
+  ObUpdateStmt *stmt = get_update_stmt();
+  if (stmt == nullptr || stmt->ai_retry_column_id_ == OB_INVALID_ID || name.is_column_quoted_
+      || !name.database_name_.empty() || !name.tbl_name_.empty() || name.col_name_.case_compare("status") != 0) {
+    return ObDelUpdResolver::resolve_column_ref_expr(name, expr);
+  }
+  const TableItem *item = stmt->get_table_items().at(0);
+  const ObTableSchema *schema = nullptr;
+  ObCaseOpRawExpr *state = nullptr;
+  if (OB_FAIL(schema_checker_->get_table_schema(item->ref_id_, schema))) {
+  } else if (schema == nullptr) { ret = OB_TABLE_NOT_EXIST; }
+  else if (OB_FAIL(params_.expr_factory_->create_raw_expr(T_OP_ARG_CASE, state))) {
+  } else {
+    const ObColumnSchemaV2 *column = schema->get_column_schema(stmt->ai_retry_column_id_);
+    ObColumnRefRawExpr *hidden = column == nullptr ? nullptr
+        : stmt->get_column_expr_by_id(item->table_id_, column->get_ai_state_column_id());
+    if (hidden == nullptr) { return OB_ERR_UNEXPECTED; }
+    state->set_arg_param_expr(hidden);
+    const char *labels[] = {"PENDING", "READY", "FAILED"};
+    for (int64_t i = 0; OB_SUCC(ret) && i < 3; ++i) {
+      ObObj value;
+      ObConstRawExpr *label = nullptr, *code = nullptr;
+      value.set_varchar(labels[i]); value.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+      if (OB_FAIL(ObRawExprUtils::build_const_obj_expr(*params_.expr_factory_, value, label))) {
+      } else {
+        label->set_length(static_cast<ObLength>(STRLEN(labels[i])));
+        if (i == 0) { state->set_default_param_expr(label); continue; }
+        value.set_int(i);
+        if (OB_FAIL(ObRawExprUtils::build_const_obj_expr(*params_.expr_factory_, value, code))) {
+        } else if (OB_FAIL(state->add_when_param_expr(code))) {
+        } else { ret = state->add_then_param_expr(label); }
+      }
+    }
+    if (OB_SUCC(ret) && OB_FAIL(state->formalize(session_info_))) {
+    } else if (OB_SUCC(ret)) { expr = state; }
   }
   return ret;
 }

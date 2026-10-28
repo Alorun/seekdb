@@ -92,7 +92,20 @@ int ObIndexBuilderUtil::add_column(
   } else {
     ObColumnSchemaV2 column;
     if (OB_FAIL(column.assign(*data_column))) {
+    } else if (column.is_ai_column() &&
+        (OB_FAIL(column.set_ai_expr(ObString())) ||
+         OB_FAIL(column.set_ai_normalized_expr(ObString())) ||
+         OB_FAIL(column.set_ai_dependency_ids(ObString())))) {
     } else {
+      // Index values are maintained by the data table's normal index DML.
+      // An index copy must never become an independent AI definition.
+      if (data_column->is_ai_column()) {
+        column.set_ai_max_retries(0);
+        column.set_ai_definition_version(0);
+        column.set_ai_state_column_id(OB_INVALID_ID);
+        column.set_ai_request_column_id(OB_INVALID_ID);
+        column.set_ai_result_spec_column_id(OB_INVALID_ID);
+      }
       column.set_table_id(OB_INVALID_ID);
       column.set_autoincrement(false);
       column.set_tbl_part_key_pos(0);

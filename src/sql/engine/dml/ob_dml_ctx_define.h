@@ -435,8 +435,11 @@ public:
   ExprFixedArray view_check_exprs_;
   bool is_primary_index_;
   bool is_table_without_pk_;
+  uint64_t ai_retry_column_id_ = common::OB_INVALID_ID;
   bool has_ai_columns_ = false;
   bool ai_private_write_ = false;
+  int64_t ai_private_kind_ = 0;
+  UIntFixedArray ai_write_columns_;
   bool reserved_advanced_trigger_;
   ObExpr *trans_info_expr_;
   bool is_vec_hnsw_index_vid_opt_;
@@ -456,6 +459,7 @@ protected:
       view_check_exprs_(alloc),
       is_primary_index_(false),
       is_table_without_pk_(false),
+      ai_write_columns_(alloc),
       reserved_advanced_trigger_(false),
       trans_info_expr_(nullptr),
       is_vec_hnsw_index_vid_opt_(false)

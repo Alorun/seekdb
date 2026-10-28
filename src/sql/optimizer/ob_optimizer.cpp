@@ -323,7 +323,7 @@ int ObOptimizer::get_session_parallel_info(int64_t &force_parallel_dop,
   return ret;
 }
 
-int ObOptimizer::check_dml_parallel_mode()
+int ObOptimizer::check_dml_parallel_mode(const ObDMLStmt &stmt)
 {
   int ret = OB_SUCCESS;
   if (ctx_.can_use_pdml() && ctx_.get_can_use_parallel_das_dml()) {
@@ -331,6 +331,28 @@ int ObOptimizer::check_dml_parallel_mode()
       ctx_.set_can_use_pdml(false);
     } else {
       ctx_.set_can_use_parallel_das_dml(false);
+    }
+  }
+  const ObDelUpdStmt *write = dynamic_cast<const ObDelUpdStmt *>(&stmt);
+  ObSEArray<const ObDmlTableInfo *, 2> targets;
+  if (OB_SUCC(ret) && write != nullptr && OB_FAIL(write->get_dml_table_infos(targets))) {
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < targets.count(); ++i) {
+    const ObTableSchema *table = nullptr;
+    if (targets.at(i) == nullptr) { ret = OB_ERR_UNEXPECTED; }
+    else {
+      uint64_t tid = targets.at(i)->ref_table_id_;
+      const TableItem *item = stmt.get_table_item_by_id(targets.at(i)->loc_table_id_);
+      // Online index backfill binds source columns using the base table's
+      // ref_id; ddl_table_id is the actual write destination.
+      if (ctx_.is_online_ddl() && item != nullptr && item->ddl_table_id_ != OB_INVALID_ID) {
+        tid = item->ddl_table_id_;
+      }
+      if (OB_FAIL(ctx_.get_schema_guard()->get_table_schema(tid, table))) {
+      } else if (table != nullptr && table->is_user_table() && table->has_ai_column()) {
+        ctx_.set_can_use_pdml(false);
+        ctx_.set_can_use_parallel_das_dml(false);
+      }
     }
   }
   return ret;
@@ -696,7 +718,7 @@ int ObOptimizer::init_env_info(ObDMLStmt &stmt)
   } else if (OB_FAIL(extract_opt_ctx_basic_flags(stmt, *session_info))) {
   } else if (OB_FAIL(check_pdml_enabled(stmt, *session_info))) {
   } else if (OB_FAIL(check_parallel_das_dml_enabled(stmt, *session_info))) {
-  } else if (OB_FAIL(check_dml_parallel_mode())) {
+  } else if (OB_FAIL(check_dml_parallel_mode(stmt))) {
   } else if (OB_FAIL(init_parallel_policy(stmt, *session_info))) {
   } else if (OB_FAIL(init_correlation_model(*session_info))) {
   } else if (OB_FAIL(opt_params.get_enum_sys_var(ObOptParamHint::ENABLE_OPTIMIZER_ROWGOAL,

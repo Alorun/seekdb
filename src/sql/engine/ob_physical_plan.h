@@ -323,6 +323,9 @@ public:
   inline void set_is_inner_sql(bool v) { is_inner_sql_ = v; }
   inline void set_is_batch_params_execute(bool v) { is_batch_params_execute_ = v; }
   inline bool is_dml_write_stmt() const { return ObStmt::is_dml_write_stmt(stmt_type_); }
+  // Alternating base table / AI column IDs from the bound user expression
+  // tree. Kept even if rewriting removes the expression or the whole scan.
+  common::ObSEArray<uint64_t, 8> ai_read_refs_;
   inline bool is_plain_select() const
   {
     bool is_plain = true;

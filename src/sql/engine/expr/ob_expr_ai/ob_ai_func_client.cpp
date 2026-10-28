@@ -216,6 +216,59 @@ int ObAIFuncClient::send_post(common::ObIAllocator &allocator,
   return ret;
 }
 
+int ObAIFuncClient::send_post_raw(ObIAllocator &allocator, const ObString &url,
+                                  ObArray<ObString> &headers, ObJsonObject *data,
+                                  ObString &response, int64_t &http_code, bool &dispatched,
+                                  const std::atomic<bool> *cancel)
+{
+  int ret = OB_SUCCESS;
+  response.reset();
+  http_code = 0;
+  dispatched = false;
+  const int64_t requested_timeout = MIN(CURL_MAX_TIMEOUT_SEC, MAX(1L, timeout_sec_));
+  reset();
+  ObStringBuffer response_buf(&allocator);
+  if (OB_FAIL(init(allocator, url, headers))) {
+  } else if (nullptr == curl_ && nullptr == (curl_ = curl_easy_init())) { ret = OB_INIT_FAIL; }
+  else {
+    // Background SQL leaves its own deadline on THIS_WORKER. Inference has a
+    // distinct bounded deadline and must not accidentally borrow that one.
+    timeout_sec_ = requested_timeout;
+    abs_timeout_ts_ = ObTimeUtility::current_time() + requested_timeout * 1000000;
+    ret = init_easy_handle(curl_, data, response_buf);
+  }
+  if (OB_SUCC(ret)) {
+    if (cancel != nullptr) {
+      curl_easy_setopt(curl_, CURLOPT_NOPROGRESS, 0L);
+      curl_easy_setopt(curl_, CURLOPT_XFERINFODATA, cancel);
+      curl_easy_setopt(curl_, CURLOPT_XFERINFOFUNCTION,
+          +[](void *context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+            return static_cast<const std::atomic<bool> *>(context)->load() ? 1 : 0;
+          });
+    }
+    if (cancel != nullptr && cancel->load()) { ret = OB_CANCELED; }
+    else {
+      const CURLcode result = curl_easy_perform(curl_);
+      long code = 0, request_size = 0;
+      // A local connect/DNS failure consumes a persisted intent, but sent no
+      // HTTP request. Endpoint-observed calls remain a separate measurement.
+      if (curl_easy_getinfo(curl_, CURLINFO_REQUEST_SIZE, &request_size) == CURLE_OK) {
+        dispatched = request_size > 0;
+      }
+      const CURLcode info_result = curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &code);
+      http_code = code;
+      // Preserve even malformed and non-2xx bodies for durable RAW_READY.
+      if (OB_FAIL(ob_write_string(allocator, response_buf.string(), response))) {
+      } else if (result == CURLE_OPERATION_TIMEDOUT) { ret = OB_TIMEOUT; }
+      else if (result != CURLE_OK || info_result != CURLE_OK) { ret = OB_CURL_ERROR; }
+    }
+    curl_easy_setopt(curl_, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl_, CURLOPT_XFERINFODATA, nullptr);
+    curl_easy_setopt(curl_, CURLOPT_XFERINFOFUNCTION, nullptr);
+  }
+  return ret;
+}
+
 int ObAIFuncClient::send_post_batch(ObArray<ObJsonObject *> &data_array, ObArray<ObJsonObject *> &responses) 
 {
   int ret = OB_SUCCESS;

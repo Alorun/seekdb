@@ -1329,6 +1329,9 @@ int ObServer::start()
       LOG_ERROR("failed to install asynchronous AI column inner schema", KR(ret));
     }
 
+    if (OB_SUCC(ret) && OB_FAIL(ai_column_service_.start(sql_proxy_, schema_service_))) {
+      LOG_ERROR("failed to start AI column workers", KR(ret));
+    }
     if (FAILEDx(net_frame_.start())) {
       LOG_ERROR("fail to start net frame", KR(ret));
     } else {
@@ -1533,6 +1536,7 @@ void ObServer::set_stop()
   net_frame_.sql_nio_stop();
   stop_ = true;
   ob_service_.set_stop();
+  ai_column_service_.stop();
   gctx_.status_ = SS_STOPPING;
   FLOG_INFO("[OBSERVER_NOTICE] observer is setted to stop");
 }
@@ -1563,6 +1567,10 @@ int ObServer::stop()
     // Otherwise session cleanup waits for a loader query that cannot publish its schema.
     stop_in_process_package_ddl(mods_ddl_service_launcher_, mods_system_package_load_service_);
   }
+
+  // Join inference before schema/session/SQL-proxy shutdown. Stop cancels curl.
+  ai_column_service_.stop();
+  ai_column_service_.wait();
 
   FLOG_INFO("begin to stop OB_LOGGER");
   OB_LOGGER.stop();

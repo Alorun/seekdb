@@ -202,6 +202,8 @@ int ObLoadDataResolver::resolve(const ParseNode &parse_tree)
       LOG_USER_ERROR(OB_NOT_SUPPORTED, "load data to the view is");
     } else if (OB_FAIL(check_trigger_constraint(tschema))) {
     } else {
+      load_stmt->ai_transactional_load_ = tschema->has_ai_column();
+      load_stmt->ai_schema_version_ = tschema->get_schema_version();
       load_args.table_id_ = tschema->get_table_id();
       load_args.table_name_ = table_name;
       load_args.database_id_ = tschema->get_database_id();
@@ -807,6 +809,9 @@ int ObLoadDataResolver::resolve_field_node(const ParseNode &node, const ObNameCa
                                         false))) {
    } else if (OB_ISNULL(col_schema)) {
      ret = OB_ERR_UNEXPECTED;
+   } else if (col_schema->is_ai_column()) {
+     ret = OB_NOT_SUPPORTED;
+     LOG_USER_ERROR(OB_NOT_SUPPORTED, "assigning an AI COLUMN in LOAD DATA");
    } else {
     ObIArray<ObLoadDataStmt::FieldOrVarStruct> &field_or_var_list = load_stmt.get_field_or_var_list();
     ObLoadDataStmt::FieldOrVarStruct tmp_struct;
@@ -866,7 +871,7 @@ int ObLoadDataResolver::resolve_empty_field_or_var_list_node(ObLoadDataStmt &loa
       if (OB_ISNULL(column_schema)) {
         ret = OB_ERR_UNEXPECTED;
       } else if (!column_schema->is_hidden()
-                 && !column_schema->is_invisible_column()) {
+                 && !column_schema->is_invisible_column() && !column_schema->is_ai_column()) {
         ObLoadDataStmt::FieldOrVarStruct tmp_struct;
         if (column_schema->is_virtual_generated_column()) {
           tmp_struct.is_table_column_ = false;
@@ -1062,7 +1067,12 @@ int ObLoadDataResolver::resolve_each_set_node(const ParseNode &node, const ObNam
                      column_name.length(), column_name.ptr(),
                      table_name.length(), table_name.ptr());
     } else {
-      assignment.column_expr_ = ref_expr;
+      const ObColumnSchemaV2 *target = nullptr;
+      if (OB_FAIL(get_column_schema(load_stmt.get_load_arguments().table_id_, q_name.col_name_, target, false))) {
+      } else if (target != nullptr && target->is_ai_column()) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "assigning an AI COLUMN in LOAD DATA SET");
+      } else { assignment.column_expr_ = ref_expr; }
     }
   }
 

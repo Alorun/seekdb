@@ -1346,7 +1346,7 @@ int ObDmlCgService::check_upd_need_all_columns(ObLogDelUpd &op,
   if (OB_ISNULL(session) || OB_ISNULL(schema_guard) || OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(session->get_binlog_row_image(binlog_row_image))) {
-  } else if (binlog_row_image == ObBinlogRowImage::FULL) {
+  } else if (table_schema->has_ai_column() || binlog_row_image == ObBinlogRowImage::FULL) {
     // full mode
     need_all_columns = true;
   } else if (!is_primary_index) {
@@ -1468,7 +1468,7 @@ int ObDmlCgService::check_del_need_all_columns(ObLogDelUpd &op,
   if (OB_ISNULL(session) || OB_ISNULL(schema_guard) || OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(session->get_binlog_row_image(binlog_row_image))) {
-  } else if (binlog_row_image == ObBinlogRowImage::FULL) {
+  } else if (table_schema->has_ai_column() || binlog_row_image == ObBinlogRowImage::FULL) {
     // full mode
     need_all_columns = true;
   } else if (table_schema->is_multivalue_index_aux()) {
@@ -2099,9 +2099,30 @@ int ObDmlCgService::generate_dml_base_ctdef(ObLogicalOperator &op,
     if (OB_FAIL(cg_.opt_ctx_->get_schema_guard()->get_table_schema(index_dml_info.ref_table_id_, ai_schema))) {
       return ret;
     }
+    const ObUpdateStmt *ai_update = dynamic_cast<const ObUpdateStmt *>(op.get_stmt());
+    if (ai_update != nullptr) { dml_base_ctdef.ai_retry_column_id_ = ai_update->ai_retry_column_id_; }
     dml_base_ctdef.has_ai_columns_ = ai_schema != nullptr && ai_schema->has_ai_column();
     ObExecContext *ai_ctx = cg_.opt_ctx_->get_exec_ctx();
     dml_base_ctdef.ai_private_write_ = ai_ctx != nullptr && ai_ctx->ai_column_capability() != nullptr;
+    if (dml_base_ctdef.ai_private_write_) {
+      dml_base_ctdef.ai_private_kind_ = static_cast<int64_t>(ai_ctx->ai_column_capability()->kind_);
+      ObSEArray<uint64_t, 4> ids;
+      if (ai_update != nullptr) {
+        const auto &infos = ai_update->get_update_table_info();
+        for (int64_t t = 0; OB_SUCC(ret) && t < infos.count(); ++t) {
+          const auto &assigns = infos.at(t)->assignments_;
+          for (int64_t a = 0; OB_SUCC(ret) && a < assigns.count(); ++a) {
+            const auto &assignment = assigns.at(a);
+            const ObColumnSchemaV2 *column = ai_schema->get_column_schema(assignment.column_expr_->get_column_id());
+            if (!assignment.is_implicit_ && column != nullptr && column->is_ai_column()) {
+              ret = ids.push_back(column->get_column_id());
+            }
+          }
+        }
+      }
+      if (OB_SUCC(ret)) { ret = dml_base_ctdef.ai_write_columns_.assign(ids); }
+      if (OB_FAIL(ret)) { return ret; }
+    }
   }
   dml_base_ctdef.is_primary_index_ = index_dml_info.is_primary_index_;
   dml_base_ctdef.is_vec_hnsw_index_vid_opt_ = index_dml_info.is_vec_hnsw_index_vid_opt_;
@@ -2234,6 +2255,9 @@ int ObDmlCgService::convert_normal_triggers(ObLogDelUpd &log_op,
                                             uint64_t dml_event)
 {
   int ret = OB_SUCCESS;
+  // Internal result maintenance and RETRY do not execute business triggers.
+  // The capability is revalidated by DML at every execution of a cached plan.
+  if (dml_ctdef.ai_private_write_ || dml_ctdef.ai_retry_column_id_ != OB_INVALID_ID) { return ret; }
   ObLogPlan *log_plan = log_op.get_plan();
   ObSchemaGetterGuard *schema_guard = NULL;
   const ObTableSchema *table_schema = NULL;

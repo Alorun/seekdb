@@ -1185,6 +1185,7 @@ public:
         tbl_name_(),
         col_name_(),
         is_star_(false),
+        is_column_quoted_(false),
         ref_expr_(NULL),
         parents_expr_info_(),
         parent_aggr_level_(-1),
@@ -1201,6 +1202,7 @@ public:
     tbl_name_ = other.tbl_name_;
     col_name_ = other.col_name_;
     is_star_ = other.is_star_;
+    is_column_quoted_ = other.is_column_quoted_;
     ref_expr_ = other.ref_expr_;
     parents_expr_info_ = other.parents_expr_info_;
     parent_aggr_level_ = other.parent_aggr_level_;
@@ -1298,6 +1300,7 @@ public:
   common::ObString tbl_name_; // When used for UDF, indicates package name
   common::ObString col_name_; // When used for UDF, indicates function name
   bool is_star_;
+  bool is_column_quoted_;
   ObColumnRefRawExpr *ref_expr_;
   ObExprInfo parents_expr_info_;
   int64_t parent_aggr_level_;

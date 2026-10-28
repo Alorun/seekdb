@@ -18,6 +18,9 @@
 
 #include "config_bridge.h"
 #include "ob_sql_trans_control.h"
+#include "sql/engine/ob_exec_context.h"
+#include "sql/engine/ob_physical_plan_ctx.h"
+#include "sql/engine/ob_physical_plan.h"
 #include "data_plane/tablelock/ob_table_lock.h"
 #include "data_plane/transaction/ob_deadlock.h"
 #include "data_plane/transaction/ob_lock_wait_stat.h"
@@ -495,6 +498,41 @@ int ObSqlTransControl::decide_trans_read_interface_specs(
   return ret;
 }
 
+int ObSqlTransControl::begin_command_dml(ObExecContext &ctx)
+{
+  int ret = OB_SUCCESS;
+  ObSQLSessionInfo *session = ctx.get_my_session();
+  ObPhysicalPlanCtx *plan_ctx = ctx.get_physical_plan_ctx();
+  data_plane::ObITransactionService *txs = nullptr;
+  data_plane::begin_lock_wait_request();
+  if (session == nullptr || plan_ctx == nullptr || ctx.ai_command_dml()) { return OB_ERR_UNEXPECTED; }
+  session->get_trans_result().reset();
+  if (OB_FAIL(get_tx_service(session, txs))) {
+  } else if (OB_FAIL(acquire_tx_if_need_(txs, *session))) {
+  } else {
+    data_plane::prepare_tx_for_statement(*session->get_tx_desc());
+    if (OB_FAIL(stmt_setup_savepoint_(session, ctx.get_das_ctx(), plan_ctx, txs, ctx.get_nested_level()))) {
+    } else if (OB_FAIL(get_read_snapshot(session, plan_ctx, ctx.get_das_ctx().get_snapshot()))) {
+    } else if (OB_FAIL(session->set_start_stmt())) {
+    } else { ctx.set_ai_command_dml(true); }
+  }
+  return ret;
+}
+
+int ObSqlTransControl::end_command_dml(ObExecContext &ctx, bool rollback)
+{
+  int ret = end_stmt(ctx, rollback, false);
+  bool autocommit = false;
+  ObSQLSessionInfo *session = ctx.get_my_session();
+  if (OB_SUCC(ret)) { ret = session->get_autocommit(autocommit); }
+  ctx.set_ai_command_dml(false);
+  if (session != nullptr && autocommit && !session->has_explicit_start_trans()) {
+    const int end_ret = implicit_end_trans(ctx, rollback || ret != OB_SUCCESS);
+    if (OB_SUCC(ret)) { ret = end_ret; }
+  }
+  return ret;
+}
+
 int ObSqlTransControl::start_stmt(ObExecContext &exec_ctx)
 {
   int ret = OB_SUCCESS;
@@ -672,7 +710,7 @@ int ObSqlTransControl::stmt_setup_snapshot_(ObSQLSessionInfo *session,
   } else if (!plan->is_plain_select() &&
     OB_FAIL(can_do_plain_insert(session, plan, exec_ctx, can_plain_insert))) {
     TRANS_LOG(WARN, "check can do plain insert failed", KPC(txs));
-  } else if (can_plain_insert) {
+  } else if (can_plain_insert && plan->ai_read_refs_.empty()) {
     das_ctx.set_use_snapshot_opt(true);
     data_plane::initialize_plain_insert_snapshot(
         *session->get_tx_desc(), snapshot);
@@ -898,10 +936,11 @@ int ObSqlTransControl::end_stmt(ObExecContext &exec_ctx, const bool rollback, co
   bool need_rollback = rollback;
 
   CK (OB_NOT_NULL(session), OB_NOT_NULL(plan_ctx));
-  CK (OB_NOT_NULL(plan = plan_ctx->get_phy_plan()));
+  OX (plan = plan_ctx->get_phy_plan());
+  CK (plan != nullptr || exec_ctx.ai_command_dml());
   OX (tx_desc = session->get_tx_desc());
-  OX (stmt_type = plan->get_stmt_type());
-  OX (is_plain_select = plan->is_plain_select());
+  OX (stmt_type = exec_ctx.ai_command_dml() ? stmt::T_LOAD_DATA : plan->get_stmt_type());
+  OX (is_plain_select = !exec_ctx.ai_command_dml() && plan->is_plain_select());
   OZ (get_tx_service(session, txs), *session);
 
   if (!is_plain_select) {

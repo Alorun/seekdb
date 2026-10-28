@@ -2,13 +2,37 @@
 
 ## 0. 阅读约定、代码基线与本轮范围
 
-调查日期：2026-10-27。本轮只更新本文，不实现运行期功能，不修改竞赛 SQL／结果，不解决其他工作的合并冲突，不停止共享构建或数据库。
+调查日期：2026-10-27；实现继续于 2026-10-28。当前在 `seekDB-basic-questions`、基线 `c94c5cdb6` 上实现运行期功能，保留已有 SQL、AI 函数增强和用户提交；不修改竞赛 SQL／结果，不停止共享构建或数据库。按用户 2026-10-28 的补充要求，始终在该分支继续；完成实现和测试后，清理本轮已确认不用的编译、隔离实例和临时验证产物，保留共享及用户产物。下方架构证据保留调查时的来源标记，当前实现与实际验证以本节进度为准。
 
-本文用 **题面**、**测试**、**代码**、**决策**、**待验**区分要求来源。下文所有新 `AiColumn*` 类型、方法和表均是拟新增接口，不能当作仓库已有 API；其他类／函数名已经阅读实现和调用方。代码定位采用 `452be98ed` 的行号；公共链路在 `5bce9e06d` 中也存在。AI 函数增强随后合入 `c899c2054`，相关行号及函数体已变化，下一轮应按函数名定位，保留增强实现。
+本文用 **题面**、**测试**、**代码**、**决策**、**待验**区分要求来源。下方调查章节的 `AiColumn*` 名称是设计名称；当前代码使用 `sql::ai_column::StatementContext`、`TxnSqlGuard`、`observer::AiColumnService` 及 `AiColumnInnerSchemaInstaller`，具体实现和验证状态以本节为准。其他类／函数名来自已阅读的实现和调用方。代码定位采用 `452be98ed` 的行号；公共链路在 `5bce9e06d` 中也存在。AI 函数增强随后合入 `c899c2054`，相关行号及函数体已变化，实现时按函数名定位并保留了增强实现。
 
 调查起点是 `async-ai-column`、HEAD `452be98ed`，存在七个文件 SQL 工作区修改。调查期间共享工作区先变为 `2026-competition`／`990771625`（七个修改已入该提交），再短暂回到 `5bce9e06d`，最终按用户指定在 **`seekDB-basic-questions`** 更新本文。没有执行 checkout、reset、stash、cherry-pick 或冲突解决。写文档初稿时 HEAD 为 `990771625`，AI 阶段 1 仍在；当时另有 AI 函数增强的暂存修改及四个 AA 冲突：`unittest/BUILD.bazel`、`unittest/CMakeLists.txt`、`unittest/all_tests_main.cpp`、`unittest/sql/BUILD.bazel`。这些都不是本轮改动。最终复核时用户已完成合入，HEAD 为 **`c899c2054`**，冲突已消失，工作区仅本文有本轮修改。
 
-### 已核实的实际进度
+### 已接入的运行期功能
+
+- `src/sql/engine/dml/ai_column_dml.{h,cpp}`：BEFORE trigger 后的依赖比较、参数快照、代际编码、失效赋值、最终 DAS rowkey 收集、语句 finish 及 external-session 同事务 outbox；候选和最终键均可溢写。AI 根函数不进入求值，普通参数目前通过现有 `calc_const_expr` 编译／求值，尚未缓存到 CtDef 参数槽，存在逐行编译开销。候选与键当前使用有界存储的重复扫描匹配，大批量性能尚待优化与测量。
+- `src/observer/ai_service/ai_column_service.{h,cpp}`：4 线程托管服务、短事务领取和 token/lease 校验、事务外单次 HTTP 派发、RAW_READY 和 typed staging、有限退避、行锁内分组 CAS 发布、ADD 分批回填与游标。原 Provider 继续生成和解析协议；新增 raw transport 不改变普通 AI 函数的默认重试。
+- `ob_update_resolver.cpp`／mysql grammar：独立 RETRY AST 降低为 UPDATE；绑定 quoted 信息，状态伪列转换为 CASE raw expression；混合 ALTER 明确拒绝。`ob_show_resolver.cpp` 接入 SHOW AI COLUMNS，Dependencies 当前展示持久化依赖列 ID。
+- `src/sql/engine/dml/ai_column_read.cpp`：优化前引用收集、物理计划保存、执行前调用与 DAS 共用的原生 tablet-scan 接口，直接传主语句 tx_desc、snapshot、tx_id 和 seq_base。无 nested SELECT。视图只展开被引用投影，仍检查其必要过滤表达式。已通过 Strict Read suite，以及 PS 开关、恒假条件、过滤范围之外未就绪和失败无部分 UPDATE 的临时验证。
+- LOAD DATA 加入 Resolver 事务标记、command DML 保存点与同 session 分批写入，普通目标保留原写入分支。普通计划已经建立所有依赖用户表的事务 intent，Schema guard 在 intent 之后取得；LOAD 在隐式提交之前持进程内元数据读栅栏，并比较缓存及持久表版本；AI 元数据 DDL 持写栅栏到其事务对象退出。该栅栏只跨普通 LOAD 的前置提交，AI 表仍使用事务表 intent。首版栅栏会让不相关表的 LOAD 与 AI 元数据 DDL 互斥，该栅栏与首次 ADD 交错的专项故障验证尚未运行。
+- 内表生成、启动安装、DDL control 和 DROP/TRUNCATE 清理已有接入；新库安装、模型调用、ADD 回填、向量 ANN 和重启恢复已动态验证，覆盖见下表；独立旧发行版数据目录升级未验证。内部 PUBLISH/BACKFILL 与 RETRY 不执行业务触发器；私有计划每次运行重新核对 capability 的表、列和操作类别，能力不会传给触发器子执行。
+
+验证记录（2026-10-28）：
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 完整服务器 | 当前最终源码已完整编译、链接；在新建的独立实例运行，最终回归见第 10 节 |
+| 新库／重启安装 | 新库启动、任务／组／control 内表和元数据视图可查询；同一数据目录多次重启安装成功；旧发行版数据目录升级尚未验证 |
+| 五组既有 SQL | 最终二进制在新建隔离实例串行运行：`ai_column_ddl`、`ai_column_t1_dml`、`ai_column_worker`、`ai_column_retry_strict`、`ai_column_vector_index` 全部通过；未修改 test/result |
+| 事务及特殊入口 | 临时验证通过显式事务与保存点回滚零调用、多行失败回滚、INSERT SELECT、IGNORE、IODKU、REPLACE、DELETE、LOAD DATA 回滚与 autocommit、并行写提示回退、无关／无变化更新零新增及大小写字节变化触发 |
+| 分组与版本 | 可控 HTTP 屏障验证分组无部分可见、一成功一失败、单成员 RETRY 替代、旧响应对新 PENDING 无效、删除重插和过期执行者；未被替代成员没有重新调用 |
+| 恢复 | 隔离实例 SIGKILL 后 STAGED 结果复用；真实响应退回持久 RAW_READY 边界后重启只重解析；两者端点调用数均不增加。未逐一注入全部提交响应丢失及四个崩溃边界 |
+| 普通 VECTOR | 主键表和 heap 表：NULL 后事务内 ANN 排除、其他事务仍见旧值、回滚恢复、RR 旧快照在新缓存之后仍见旧向量、新快照排除及重新写入恢复；另一事务先／后刷新缓存的 own-writes 交错也通过 |
+| ADD／SHOW／DROP | 多列 ADD 已有行回填、SHOW 的 LIKE／WHERE 及无关 DDL 不重调已通过；DROP 后其余字段值、TRUNCATE 和 DROP 数据库生命周期最终补验通过 |
+
+独立实例使用端口 12891 和本轮临时数据目录；验收后已停止并删除本轮隔离实例、`build_ai_column`、临时验证脚本和日志，保留源代码及用户原有 `build`／`build_release`；未停止共享实例。旧阶段 1 的 12 个局部测试不计作当前完整服务器验收。按用户最新要求只完成功能和必要测试，不新增性能／工程交付范围。
+
+### 阶段 1 历史基线（452be98ed，非当前完成状态）
 
 | 能力 | 当前事实及关键位置（452be98ed） |
 | --- | --- |
@@ -19,9 +43,9 @@
 | CREATE／ADD | `ob_create_table_resolver.cpp:954` 完整列集合后绑定；`ob_alter_table_resolver.cpp:3429`；`src/rootserver/ob_ddl_service.cpp:7779`、`:7835` 分配并保存隐藏列 |
 | 隐藏列 | `ob_ddl_resolver.cpp:2291` `add_ai_column_hidden_columns`：每个 AI 列各一个 nullable TINYINT state、VARCHAR(128) binary request、VARCHAR(256) binary result_spec；目前没有运行期初始化、编码或状态契约 |
 | 展示及限制 | `src/sql/printer/ob_schema_printer.cpp:211` SHOW CREATE；`ob_alter_table_resolver.cpp:3540` 明确拒绝 MODIFY／CHANGE AI，`:4371` 保护依赖重命名；`ob_ddl_resolver.cpp:2274` 依赖保护 |
-| 尚未实现 | 同事务失效／入队、持久化任务表、worker、类型化暂存和发布、RETRY、strict 变量／检查、SHOW AI COLUMNS、ADD 旧行回填、AI 专属 ANN 验证 |
+| 阶段 1 当时未接入的运行期功能 | 本轮已补充运行期代码，实际验证见本节；不能将此历史基线当作当前代码状态 |
 
-与上一轮记录的功能进度基本一致；差异是已有实现已提交、当前分支已变化、共享 AI 函数增强已在调查期间合入。规范表达式中的 `__seekdb_ai_column_result_prompt` 目前仅被存储，尚未有 worker 消费；不能据此声称系统提示已发送。旧文档“没有 AI 实现”“题面三个 C++ 文件不存在”描述的是阶段 1 开始前，现已不适用于当前代码。
+与上一轮记录的功能进度基本一致；差异是已有实现已提交、当前分支已变化、共享 AI 函数增强已在调查期间合入。阶段 1 只存储 `__seekdb_ai_column_result_prompt`；本轮参数准备已提取为独立 system 内容，并在 Provider 配置验证前移除内部标记，实际请求已由 typed-prompts Mock 验证。旧文档“没有 AI 实现”“题面三个 C++ 文件不存在”描述的是阶段 1 开始前，现已不适用于当前代码。
 
 ## 1. 精确要求、测试约定与缺失信息
 
@@ -135,11 +159,11 @@ LOAD DATA 有明确旁路：`src/sql/engine/cmd/ob_load_data_executor.cpp:28` �
 | 每行逻辑 incarnation | UUID16，复制在该行每 AI 列 spec | INSERT／REPLACE 新分配，DELETE 后永不复用；PK 移动保留。ADD 首个 AI 列时在行锁下生成，后加列从已有合法 spec 复制；并发回填／更新必须锁行后取值 |
 | 每列 generation | u64 | 仅该列失效／手动 RETRY 时 +1；PK 移动所有 AI 列 +1；溢出报错，不回绕。不同列不能共用一个行 generation，否则 RETRY tags 会误废弃 emb |
 | 列 Schema definition_version | 非零 i64 | 创建／ADD 时固定保存，不能每次用最新 table schema_version 重算；无关 DDL 不失效任务。当前 getter 对 0 的 fallback 仅作兼容，运行期前应固化 |
-| 列 Schema local_session_vars | 已有 ObLocalSessionVar | 复用普通 generated 表达式固化机制保存定义解析的 SQL mode／charset／collation 等；AI 当前漏接持久化条件，下一轮补齐，不再新增平行的 ai_sql_mode 字段 |
+| 列 Schema local_session_vars | 已有 ObLocalSessionVar | 复用普通 generated 表达式固化机制保存定义解析的 SQL mode／charset／collation 等；已补齐 AI 的持久化条件，不新增平行的 ai_sql_mode 字段 |
 
 UUID 复用 `ObExprUuid::gen_server_uuid(char*,UuidCommon::LENGTH_UUID)`（`src/sql/engine/expr/ob_expr_uuid.h:92`、cpp:483），不是主键／Mock 派生值。该函数生成标准 UUID 的缓冲长度按现有 LENGTH_UUID 常量，不假定带 NUL；存储时解码 UUID16 或保存规范字符。request_id、incarnation、claim_token 分别独立生成，不能互相替代。
 
-### 3.2 新增内表（决策；尚未实现）
+### 3.2 已接入的新增内表
 
 在 `src/share/inner_table/ob_inner_table_schema_def.py` 定义并用原生成链生成 C++。已核对空闲 ID **1131 task、1132 group、1135 control**；1133/1134 是 objauth/history，不能占用。落地前生成器再次验证全局唯一。保留现有 `__all_ai_column` 视图。
 
@@ -227,7 +251,7 @@ NULL 沿用实际 AI 函数语义：COMPLETE 的 SQL NULL prompt 当前非法，
 - `ob_ai_func_utils.cpp:1283` `ObAIFuncModel::call_completion` 已支持 provider，但 :1291 system prompt 为空；新增可选 `AiCallOptions{system_prompt,deadline,transport_retries,dispatch_observer}`，普通调用使用旧默认值。worker 取内部 result hint，放单独 system 内容、从 provider config 移除内部 key，保持用户输入原样；OpenAI provider 现有 get_body 接受 system/user 两份 prompt（:1302），不能把类型指令拼进原始 content。
 - 嵌入复用 `call_dense_embedding_vector_v2`；调用返回后再按目标 VECTOR(n) 做严格验证，不认为发送 dimensions 就已保证正确。
 - `ob_ai_func_client.cpp:79` 由 THIS_WORKER 剩余时间覆盖 timeout；异步选项应取 worker deadline 与明确 request deadline 的最小值，并设置 curl 总时限／连接时限和取消回调。异步 `transport_retries=0`，一次任务尝试至多一个 HTTP dispatch；调用计数放在真实 curl perform 前。
-- 基线 client :186 未检查 JSON 根类型、embed :1469/1478 强转；共享 AI 增强已修复根类型、向量元素／维度／index 校验、响应缓冲生命周期、鉴权头日志等。保留其修复，下一轮只补 call options、system hint 和异步持久化拆分，不再次覆盖这些函数。
+- 基线 client :186 未检查 JSON 根类型、embed :1469/1478 强转；共享 AI 增强已修复根类型、向量元素／维度／index 校验、响应缓冲生命周期、鉴权头日志等。本轮保留其修复，补充了 raw transport、system hint 和异步持久化拆分。
 
 ### 类型化暂存与无必要重调
 
@@ -433,81 +457,44 @@ DROP AI 列／表在原 DDL 事务中按 table/column ID 取消相关任务、�
 
 **实现决策**：失效、成功发布、失败 NULL、DELETE 全部只用上述正常 DML 和辅助表日志；为 AI 向量查询提供明确的 query-local MVCC 可见性契约，必要时在 `ObDasVecScanUtils`／adaptor 现有重建路径加 `force_snapshot_bitmap`，禁止在事务有 own writes 或共享缓存新于／不能覆盖快照时回退到裸共享位图。候选有效性必须在 ANN top-k 合并前按同一快照排除旧 VID／NULL，不能在最终 SELECT 才过滤而漏掉正确邻居。hidden-PK 的 VID 优化（`ob_del_upd_resolver.cpp:2498`）也要走同一契约，不以换一个 VID 为所有模式的前提。
 
-**待验而非已保证**：当前没有运行 AI 失效／发布或普通向量 NULL＋回滚 SQL；静态代码尚不能证明所有 HNSW／VSAG、heap VID 优化、own-write ANN 和 async-cache 分支都满足回滚可见性。下一轮先做一个普通 VECTOR 的独立事务 smoke，若失败，在上述查询位图／辅助表边界修复后再接 AI；不能把库本身的缺陷归因于 AI 并忽略，也不能宣称现有 ANN 代码已经通过本题。此为明确的实施验收关卡，不需重新选择 outbox／发布架构。
+**动态验证范围**：普通 VECTOR 的主键／heap、NULL／回滚／own writes、旧快照与共享缓存交错已通过临时 SQL；AI 向量 suite 也曾通过，最终串行结果见第 10 节。失效与发布通过正常索引 DML；本轮没有直接调用 VSAG add_index，也未新增未经验证的位图旁路。上述覆盖不代表所有同步／异步缓存并发排列均已故障注入验证。
 
-## 9. 下一轮实施顺序、真实文件和必要新增接口
+## 9. 最终代码接入位置
 
-以下按依赖编译，先产生一个可运行闭环，再扩展入口。不要一次生成全部未编译 worker。
+| 功能 | 真实位置 |
+| --- | --- |
+| 持久化安装、DDL 生命周期 | `src/rootserver/ob_bootstrap.cpp`、`ob_ddl_operator.cpp`、`ob_ddl_service.cpp`；内表原生成链，三个隐藏字段及 `src/share/ai_column/ai_column_types.h` |
+| DML、输入快照、同事务 outbox | `src/sql/engine/dml/ai_column_dml.{h,cpp}`、`ob_dml_service.cpp`、`ob_table_insert_up_op.cpp`、`ob_table_replace_op.cpp`、`src/sql/ob_result_set.cpp` |
+| 写保护、失效赋值及索引规划 | `src/sql/resolver/dml/ob_del_upd_resolver.cpp`、`src/sql/code_generator/ob_dml_cg_service.cpp`、`ob_dml_ctx_define.{h,cpp}`；`ob_optimizer.cpp` 的 AI 目标串行写回退 |
+| LOAD DATA | `src/sql/resolver/cmd/ob_load_data_resolver.cpp`、`ob_load_data_stmt.h`、`src/sql/engine/cmd/ob_load_data_executor.cpp`／`ob_load_data_impl.cpp`；`ObSqlTransControl::begin_command_dml/end_command_dml` |
+| Worker／分组发布／回填 | `src/observer/ai_service/ai_column_service.{h,cpp}`，`src/observer/ob_server.cpp` 托管生命周期；`ob_ai_func_client.{h,cpp}` raw transport 复用 Provider |
+| RETRY／SHOW | `src/sql/parser/sql_parser_mysql_mode.y`，`ob_update_resolver.cpp`，`src/sql/resolver/cmd/ob_show_resolver.cpp` |
+| Strict Read | `src/sql/engine/dml/ai_column_read.cpp`、`ob_physical_plan.{h,cpp}`、`ob_result_set.cpp`；SESSION 系统变量及 11120 生成链 |
 
-| 顺序 | 修改位置 | 复用／新增与完成标准 |
-| --- | --- | --- |
-| 0 基线复核 | `c899c2054` 中用户已完成的 AI 函数增强合入 | 当前无合并冲突；保留阶段 1 三组 AI COLUMN 测试及增强的 provider 校验，重新构建才能继续声称当前源码有效 |
-| 1 元数据可运行 | `src/share/inner_table/ob_inner_table_schema_def.py`、生成目标；`src/observer/ob_server.cpp`、`src/rootserver/ob_bootstrap.cpp`、`ob_ddl_service.cpp`；`ob_column_schema.{h,cpp}`、TableSqlService、retrieve_utils.ipp | 新 task/group/control，安装器、固定 def version、spec codec、local vars；新增 `src/share/ai_column/` 共享结构、`AiColumnInnerSchemaInstaller`；验证新库及旧库重启元数据 |
-| 2 DML 编译与保护 | `src/sql/resolver/dml/ob_insert_resolver.cpp`、`ob_del_upd_resolver.cpp`、`ob_update_resolver.cpp`、`ob_dml_resolver.cpp`、`src/sql/optimizer/ob_optimizer.cpp`；`src/sql/code_generator/ob_dml_cg_service.cpp`、`src/sql/engine/dml/ob_dml_ctx_define.{h,cpp}` | `AiColumnDmlCtDef`、纯参数槽、用户写保护；注入 assignments 后重用向量 additional assignments／related defs；先确认普通向量 NULL/ROLLBACK smoke |
-| 3 T1 闭环 | `src/sql/engine/dml/ob_dml_service.cpp`、`ob_table_insert_op.cpp`、`ob_table_update_op.cpp`、`ob_table_delete_op.cpp`、`ob_table_insert_up_op.cpp`、`ob_table_replace_op.cpp`；`src/sql/engine/ob_exec_context.{h,cpp}`、`src/sql/ob_result_set.cpp`、`src/sql/ob_sql_utils.{h,cpp}` | 新 `AiColumnDmlService`、可溢写 `AiChangeCollector`、`AiColumnTxnSqlGuard`、`AiColumnSchemaFence::begin`、`AiColumnStatementService::finish`。并补 `src/sql/resolver/cmd/ob_load_data_resolver.cpp`／`ob_load_data_stmt.{h,cpp}`、`src/sql/engine/cmd/ob_load_data_executor.cpp`／`ob_load_data_impl.cpp` 的 AI LOAD 同session路径及 `ObSqlTransControl::begin_command_dml/end_command_dml`。覆盖 IGNORE/IODKU/REPLACE/SELECT/LOAD，提交／保存点／多行失败时 outbox 与数据统一 |
-| 4 推理和发布 | `src/sql/engine/expr/ob_expr_ai/ob_ai_func_utils.{h,cpp}`、`ob_ai_func_client.{h,cpp}`、complete/embed 参数准备；新增 `src/observer/ai_column/` 服务／表操作器／发布器；runtime_controller.{h,cpp} 和构建清单 | `PreparedAiCall`、`AiCallOptions`、transport/parse 分拆、类型化封包；托管 service、T2/T3/T4、lease fencing、分组屏障和清理；先跑 worker SQL，再故障屏障 |
-| 5 RETRY | parser item types（query/objit 对齐）、mysql y/l、`src/sql/resolver/ob_resolver.cpp`；新增 Retry resolver；UPDATE plan 的内核标记 | AST 条件绑定到 UPDATE、quoted status 区分、复用 T1、零行/READY/非法目标/混合动作 |
-| 6 strict | `src/share/system_variable/gen_ob_sys_variables.py` 及生成文件、`src/share/ob_errno.def` 及生成文件；`ob_dml_stmt`／resolver 完成点、`src/sql/engine/ob_physical_plan.{h,cpp}`、`ob_result_set.cpp`、`ob_sql_trans_control.cpp` | ref collector、plan refs/deps、runtime session flag、11120、direct DAS checker；整列检查与语句相同 S，PS/缓存切变量/重试均检查 |
-| 7 DDL／恢复／ANN | `ob_alter_table_resolver.cpp`、`src/sql/resolver/cmd/ob_show_resolver.cpp`、grammar、`ob_ddl_service.cpp`；`ob_das_vec_scan_utils.cpp`／`ob_plugin_vector_index_adaptor.cpp` 视 smoke 结果 | SHOW SQL 生成与现有视图绑定；ADD 持久 backfill、DROP/TRUNCATE 取消；query-local 可见性契约、own-write/回滚、崩溃恢复 |
+输入参数当前逐行通过现有表达式编译／求值，候选键匹配采用可溢写重复扫描；首版未优化其大批量成本。AI 写计划回退串行。MODIFY／CHANGE AI 定义继续明确拒绝；仅 MySQL async，不支持 AI 列链式依赖。
 
-SHOW 现成实例是 `ObShowResolver` `ob_show_resolver.cpp:366` T_SHOW_COLUMNS，经 resolve_show_from_table(:381) 做名称／权限再用 SHOW SQL 模板(:402) 生成 SELECT，并绑定 LIKE/WHERE AST；新增 SHOW AI 分支复用它查询 `__all_ai_column`（加 Schema 类型/依赖显示），不做 HTTP，也不走自制表扫描。
+## 10. 最小复现和实际覆盖
 
-## 10. 已运行检查、最小端到端验收与覆盖
-
-### 本轮实际检查
-
-1. 读取 AGENTS、状态／历史、既有文档、五组 SQL／结果／Mock，以及上文实现和调用方。未运行 reset、未改功能文件／SQL期望、未终止任何实例。
-2. 在共享工作区切换和增强冲突出现**之前**运行：
+本轮独立构建：
 
 ```sh
-./build_release/unittest/sql/sql_tests --gtest_filter='AiColumn*'
-/tmp/seekdb-ai-column-units/schema_tests --gtest_filter='AiColumn*'
+cmake -S . -B build_ai_column -G 'Unix Makefiles' \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DOB_ENABLE_UNITY=ON -DOB_USE_LLD=ON
+cmake --build build_ai_column --target seekdb -- -j2
 ```
 
-前者通过 Parser 3、Resolver 6，共 9；后者通过 Schema 3。后者是上一轮生产参数局部链接的临时二进制，时间戳 13:07，不是本轮重建 share_tests；前者／运行库时间戳 18:18，覆盖调查起点的阶段 1。**不能将这 12 例视为合入后的 c899c2054 源码或完整服务器／SQL集成通过。** `build_release/unittest/share/share_tests` 当时不存在。
-
-3. 最终 `git diff --check -- docs/developer-guide/zh/ai-column.md` 通过；重新清点三个 C++、五组 SQL/result 和 Mock 共 14/14 文件存在；Mock 使用 Python 内存 compile 语法检查通过，没有启动服务或生成 pycache。
-
-4. `/usr/bin/mysql`、`/usr/bin/mysqltest` 可用；发现过共享 seekdb 实例，没有向其写入 AI 测试数据或替换二进制。完整构建、五组 SQL、普通向量事务 smoke、崩溃恢复、吞吐／延迟未运行。调查／写文档期间构建清单一度存在 AA 冲突，最终已由用户合入消除；本轮按调查范围没有重建完整服务器，阶段 2 之后的功能本来尚未实现。
-
-### 下一轮最小复现（不改测试期望）
-
-使用用户已完成合并的确定源码基线和**独立构建目录／数据目录／端口**；不要重用或停止共享实例。以下正常构建命令适用于已协调可用的 build_release，否则用独立目录配置等价 target：
+SQL 使用仓库自带 mysqltest，在 `tools/deploy` 下执行，CASE 依次为 `ai_column_ddl`、`ai_column_t1_dml`、`ai_column_worker`、`ai_column_retry_strict`、`ai_column_vector_index`：
 
 ```sh
-./build.sh release
-cmake --build build_release --target seekdb sql_tests share_tests -- -j2
-./build_release/unittest/sql/sql_tests --gtest_filter='AiColumn*'
-./build_release/unittest/share/share_tests --gtest_filter='AiColumn*'
-```
-
-先为隔离实例创建 base-dir；按 `seekdb --help` 启动其单 runtime，分配空闲数据库端口（不是 Mock 的 19120..19124）、独立数据盘／日志盘。本轮不指定替换现有实例的命令，不复用包含真实业务数据的目录。新库与一个保留旧 Schema 的独立目录都验证安装器及重启。
-
-SQL 在 `tools/deploy` 为 cwd（脚本相对路径要求）；`CASE` 依次为 ai_column_ddl、ai_column_t1_dml、ai_column_worker、ai_column_retry_strict、ai_column_vector_index：
-
-```sh
-cd tools/deploy
-mysqltest --no-defaults --host=127.0.0.1 --port=PORT --user=root \
+../../deps/3rd/u01/obclient/bin/mysqltest --no-defaults \
+  --host=127.0.0.1 --port=12891 --user=root --database=test \
   --test-file=mysql_test/test_suite/ai_column/t/CASE.test \
   --result-file=mysql_test/test_suite/ai_column/r/mysql/CASE.result
 ```
 
-先 DDL（19120 是定义地址，不启动 Mock，不需模型凭据）；其余脚本自行 start/stop Mock：19121、19122、19124、19123，串行运行并确认端口所属，不能 kill 别人的 listener。DDL 后先做普通 VECTOR NULL/ROLLBACK/ANN，再接 AI 运行期。现有测试入口缺失时直接报告，不创建假的 tools/ai_gateway。
+五组使用既有 test/result，串行运行，Mock 19120～19124；DDL 不发模型请求。最终源码完整构建通过；上述五组 SQL 已在新建隔离实例串行全部通过。临时验证采用两连接与 HTTP 屏障、带截止轮询；没有新增大量专项文件或更改测试期望。
 
-最小补验使用已有 suite 内的少量 SQL 或 `/tmp` 控制脚本：两连接与 Mock 控制屏障，带截止的状态轮询；复用内核 ERRSIM 在 T2提交后／HTTP后T3前／T4提交前后中断**隔离实例**，并测试过期 token 的旧执行者恢复。现有 Mock 的固定延迟可跑基础乱序，但恢复／原子可见性补验应增加可控屏障，不能用长 sleep 代替。无需新增大量专项文件。
+最后修复：后台回填 finish 的 external-session nested SQL 恢复进入前的 retry context 初始化状态，避免后续游标 UPDATE 被内层连接拒绝；在线 DROP 将结果列和三个隐藏列按现有 instant DROP 契约标记 unused、清除 AI 元数据，并持久化前驱关系，保留旧行存储布局直到正常重写回收；TRUNCATE 复用调用方替换 tablet 前已经取得的 EXCLUSIVE 锁，不再锁已退休的旧 tablet。多列 ADD／SHOW／DROP 后其余字段值／TRUNCATE／DROP 数据库均已在最终二进制和新建实例补验通过。
 
-| 评分模块 | 现有证据 | 完整实现后最小验收（当前未通过的项目） |
-| --- | --- | --- |
-| DDL／Schema | 12 个局部 C++ 例，SHOW/持久化静态调查 | 完整构建＋ddl.test；DDL HTTP零调用，新增／拷贝／重映射／旧库升级，ADD旧行回填，SHOW |
-| DML／事务 | 仅真实接口／保存点／DAS路径证据 | t1_dml.test；回滚远端零调用、无关更新零新增、INSERT SELECT、多行失败、IGNORE/IODKU/REPLACE、PK移动、删除重插 |
-| worker／一致性 | 仅设计及现有 Mock | worker.test；同组不部分可见、一成功一失败原子发布、旧响应对新PENDING无效、部分组被替代、过期执行者、四个崩溃边界恢复、429/5xx/断连/坏JSON/维度错误 |
-| RETRY／strict | 仅 AST引号标志、DAS快照和冲突实现证据 | retry_strict.test；quoted status、READY／零行、条件SQL语义、where外未就绪、join/view/subquery、PS与开关、并发快照／写冲突、失败无部分DML |
-| AI向量／索引 | 普通DML与MVCC辅助表/位图代码依据，未动态验证 | vector_index.test＋普通vector smoke；失效/失败/DELETE/发布、事务内ANN、回滚恢复、旧快照/新缓存、heap及同步/异步索引、重启后查询 |
-
-性能最后测：业务 INSERT/UPDATE 到提交的延迟；提交到**组结果业务可见**的延迟；单位时间完成组／成员吞吐；curl实际dispatch与Mock端点计数。固定输入、模型、重试预算及一致性；同时报批大小、并发和失败率；不能用入队吞吐代替完成吞吐。本轮没有性能数字、恢复通过率或官方得分结论。
-
-### 阻塞及实施边界
-
-需求层没有必须再次询问的阻塞：默认值、部分替代组、RETRY事务属性、NULL／Endpoint变更、MODIFY拒绝范围已明确为本次决策。架构接口已定位，可按第9节直接实施，无需再进行同等范围调查。
-
-最终复核工作树已经没有合并冲突，本轮只留下本文修改；**没有当前需求／环境阻塞，已具备按本方案直接实施的条件**。普通向量 NULL／回滚／own-write ANN、系统表安装器和跨入口 finish 收集器是下一轮优先运行的实现验证关卡，均未被描述为已有保证。若阶段 1 所在提交再次不在工作树中，应由用户保留／整合其提交，不能由协作者破坏性恢复整棵树。
+旧阶段 1 的 Parser 3、Resolver 6、Schema 3 曾局部通过，仅作历史记录。本轮不声称重新跑过这些局部二进制。独立旧发行版升级、全部提交响应丢失和崩溃位置、所有向量缓存排列、完整性能数据未验证，不提供官方得分估计。用户要求只完成功能和必要测试，故不扩大为性能或工程交付项目。

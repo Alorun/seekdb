@@ -34,6 +34,12 @@ public:
   void clean_up();
   void reset();
   void set_timeout_sec(int64_t timeout_sec) { timeout_sec_ = timeout_sec; }
+  // A persistent task owns its retry budget. This entry dispatches at most
+  // once and returns the raw body before JSON/provider parsing.
+  int send_post_raw(common::ObIAllocator &allocator, const ObString &url,
+                    ObArray<ObString> &headers, ObJsonObject *data,
+                    ObString &response, int64_t &http_code, bool &dispatched,
+                    const std::atomic<bool> *cancel = nullptr);
   // ai function interface
   virtual int send_post(common::ObIAllocator &allocator, 
                         const ObString &url,

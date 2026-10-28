@@ -18,6 +18,7 @@
 #define OCEANBASE_SQL_LOAD_DATA_IMPL_H_
 
 #include "share/ob_define.h"
+#include "sql/engine/ob_physical_plan.h"
 #include "lib/file/ob_file.h"
 #include "lib/hash/ob_build_in_hashmap.h"
 #include "lib/hash_func/murmur_hash.h"
@@ -694,9 +695,10 @@ public:
                       ObString err_msg);
 
   static int exec_shuffle(int64_t task_id, ObShuffleTaskHandle *handle);
-  static int exec_insert(ObInsertTask &task);
+  static int exec_insert(ObInsertTask &task, ObExecContext *ai_ctx);
 
 private:
+  bool ai_transactional_ = false;
   static int gen_load_table_column_desc(ObExecContext &ctx,
                                         ObLoadDataStmt &load_stmt,
                                         common::ObIArray<ObLoadTableColumnDesc> &insert_infos);

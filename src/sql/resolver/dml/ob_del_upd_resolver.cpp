@@ -499,7 +499,8 @@ int ObDelUpdResolver::add_ai_column_assignments(const TableItem &table,
                                                   ObTableAssignment &assignments)
 {
   int ret = OB_SUCCESS;
-  if (OB_FAIL(resolve_all_basic_table_columns(table, true, nullptr))) {
+  ObSEArray<ColumnItem, 32> resolved_columns;
+  if (OB_FAIL(resolve_all_basic_table_columns(table, true, &resolved_columns))) {
   }
   for (ObTableSchema::const_column_iterator it = schema.column_begin();
        OB_SUCC(ret) && it != schema.column_end(); ++it) {
@@ -1149,7 +1150,7 @@ bool ObDelUpdResolver::need_all_columns(const ObTableSchema &table_schema,
                                         const int64_t binlog_row_image)
 {
   // Returns true for MINIMAL too because the optimizer currently needs full rows.
-  return (table_schema.is_table_without_pk() ||
+  return (table_schema.has_ai_column() || table_schema.is_table_without_pk() ||
           table_schema.get_foreign_key_infos().count() > 0 ||
           table_schema.get_trigger_list().count() > 0 ||
           table_schema.has_check_constraint() ||

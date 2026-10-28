@@ -1113,6 +1113,7 @@ int ObRawExprResolverImpl::process_ident_node(const ParseNode &node, ObRawExpr *
     } else {
       q_name.format_qualified_name(ctx_.case_mode_);
       q_name.parents_expr_info_ = ctx_.parents_expr_info_;
+      q_name.is_column_quoted_ = node.is_input_quoted_;
       ObColumnRefRawExpr *b_expr = NULL;
       if (OB_FAIL(ctx_.expr_factory_.create_raw_expr(T_REF_COLUMN, b_expr))) {
       } else if (OB_ISNULL(b_expr)) {
@@ -2451,6 +2452,7 @@ int ObRawExprResolverImpl::process_column_ref_node(
     }
     if (OB_SUCC(ret)) {
       column_ref.parents_expr_info_ = ctx_.parents_expr_info_;
+      column_ref.is_column_quoted_ = node->children_[2] != nullptr && node->children_[2]->is_input_quoted_;
       ObColumnRefRawExpr *b_expr = NULL;
       if (OB_FAIL(ctx_.expr_factory_.create_raw_expr(T_REF_COLUMN, b_expr))) {
       } else if (OB_ISNULL(b_expr)) {

@@ -454,7 +454,9 @@ def print_discard_column(column_name):
 
 def print_timestamp_column(column_name, rowkey_id, index_id, part_key_pos, column_type, column_collation_type, column_length, column_precision, column_scale, is_nullable, is_autoincrement, column_id, is_on_update_for_timestamp,is_hidden, is_storing_column):
   global cpp_f
-  if rowkey_id > 0:
+  # A secondary index key retains the base column's nullability. Only a base
+  # table primary key (including a primary-key suffix) forces NOT NULL.
+  if rowkey_id > 0 and index_id == 0:
     is_nullable = "false"
 
   if is_hidden == 'true' or is_storing_column == 'true':

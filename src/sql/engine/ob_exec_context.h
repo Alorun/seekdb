@@ -415,6 +415,10 @@ public:
   }
   //get the parent execute context in nested sql
   ai_column::StatementContext *&ai_column_context() { return ai_column_context_; }
+  bool ai_command_dml() const { return ai_command_dml_; }
+  bool ai_load_schema_barrier() const { return ai_load_schema_barrier_; }
+  void set_ai_load_schema_barrier(bool value) { ai_load_schema_barrier_ = value; }
+  void set_ai_command_dml(bool value) { ai_command_dml_ = value; }
   bool ai_column_internal_sql() const { return ai_column_internal_sql_; }
   void set_ai_column_internal_sql(bool value) { ai_column_internal_sql_ = value; }
   const ai_column::WriteCapability *ai_column_capability() const { return ai_column_capability_; }
@@ -927,6 +931,8 @@ protected:
   //in order to access the parent sql attributes,
   //such as the mutating option checking or nested sql constraining checking
   ai_column::StatementContext *ai_column_context_ = nullptr;
+  bool ai_command_dml_ = false;
+  bool ai_load_schema_barrier_ = false;
   bool ai_column_internal_sql_ = false;
   const ai_column::WriteCapability *ai_column_capability_ = nullptr;
   const ai_column::WriteCapability *ai_column_next_capability_ = nullptr;

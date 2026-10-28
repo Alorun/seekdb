@@ -42,6 +42,7 @@ namespace sql
 class ObUpdateStmt : public ObDelUpdStmt
 {
 public:
+  uint64_t ai_retry_column_id_ = common::OB_INVALID_ID;
   ObUpdateStmt();
   virtual ~ObUpdateStmt();
   int deep_copy_stmt_struct(ObIAllocator &allocator,

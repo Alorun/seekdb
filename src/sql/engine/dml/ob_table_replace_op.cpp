@@ -17,6 +17,7 @@
 #include "sql/resolver/ddl/ob_fts_index_builder_util.h"
 #define USING_LOG_PREFIX SQL_ENG
 #include "sql/engine/dml/ob_table_replace_op.h"
+#include "sql/engine/dml/ai_column_dml.h"
 #include "data_plane/blocksstable/ob_datum_row.h"
 #include "data_plane/blocksstable/ob_datum_row_iterator.h"
 #include "sql/engine/ob_physical_plan.h"
@@ -706,6 +707,8 @@ int ObTableReplaceOp::replace_conflict_row_cache()
     } else if (OB_FAIL(ObDMLService::process_insert_row(ins_ctdef, ins_rtdef, *this, is_skipped))) {
     } else if (OB_UNLIKELY(is_skipped)) {
       ret = OB_ERR_UNEXPECTED;
+    } else if (ins_ctdef.has_ai_columns_ &&
+               OB_FAIL(conflict_checker_.convert_exprs_to_stored_row(get_primary_table_new_row(), insert_new_row))) {
     } else if (OB_FAIL(conflict_checker_.insert_new_row(insert_new_row, ObNewRowSource::FROM_INSERT))) {
     }
     if (OB_SUCC(ret)) {

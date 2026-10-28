@@ -39,6 +39,7 @@ int ObUpdateStmt::deep_copy_stmt_struct(ObIAllocator &allocator,
 {
   int ret = OB_SUCCESS;
   const ObUpdateStmt &other = static_cast<const ObUpdateStmt &>(input);
+  ai_retry_column_id_ = other.ai_retry_column_id_;
   if (OB_UNLIKELY(get_stmt_type() != input.get_stmt_type())) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(ObDelUpdStmt::deep_copy_stmt_struct(allocator,
@@ -55,6 +56,7 @@ int ObUpdateStmt::deep_copy_stmt_struct(ObIAllocator &allocator,
 
 int ObUpdateStmt::assign(const ObUpdateStmt &other)
 {
+  ai_retry_column_id_ = other.ai_retry_column_id_;
   int ret = OB_SUCCESS;
   if (OB_FAIL(ObDelUpdStmt::assign(other))) {
   } else if (OB_FAIL(table_info_.assign(other.table_info_))) {
