@@ -287,30 +287,24 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
   static constexpr int64_t FT_MAX_WORD_BUCKET = 997;
   const int64_t ft_word_bkt_cnt = MIN(MAX(fulltext.length() / 10, 2), FT_MAX_WORD_BUCKET);
   int64_t doc_length = 0;
-  ObFTWordMap ft_word_map;
+  ObFTWordMap *ft_word_map = nullptr;
   void *rows_buf = nullptr;
   blocksstable::ObDatumRow *rows = nullptr;
   if (OB_ISNULL(helper) || OB_UNLIKELY(!ft_obj_meta.is_valid())) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (0 == fulltext.length()) {
-    ret = OB_ITER_END;
-  } else if (OB_FAIL(ft_word_map.create(ft_word_bkt_cnt, common::ObMemAttr("FTWordMap")))) {
-  } else if (OB_FAIL(segment_and_calc_word_count(allocator,
-                                                 helper,
-                                                 ft_obj_meta,
-                                                 fulltext,
-                                                 doc_length,
-                                                 ft_word_map))) {
-  } else if (0 == ft_word_map.size()) {
+  } else if (OB_FAIL(helper->segment(ft_obj_meta, fulltext.ptr(), fulltext.length(),
+                                    doc_length, ft_word_bkt_cnt, ft_word_map,
+                                    false/*index storage does not expose hash iteration order*/))) {
+  } else if (0 == ft_word_map->size()) {
     ret = OB_ITER_END;
   } else if (OB_ISNULL(rows_buf = reinterpret_cast<char *>(
-                           allocator.alloc(ft_word_map.size() * sizeof(blocksstable::ObDatumRow))))) {
+                           allocator.alloc(ft_word_map->size() * sizeof(blocksstable::ObDatumRow))))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
     int64_t i = 0;
-    rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map.size()];
-    for (ObFTWordMap::const_iterator iter = ft_word_map.begin();
-         OB_SUCC(ret) && iter != ft_word_map.end();
+    rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map->size()];
+    for (ObFTWordMap::const_iterator iter = ft_word_map->begin();
+         OB_SUCC(ret) && iter != ft_word_map->end();
          ++iter) {
       if (OB_FAIL(rows[i].init(allocator, FT_WORD_DOC_COL_CNT))) {
       } else {

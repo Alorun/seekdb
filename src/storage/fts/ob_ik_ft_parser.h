@@ -34,8 +34,10 @@ class ObFTDictHub;
 class ObIKFTParser final : public ObITokenIterator
 {
 public:
-  ObIKFTParser(ObIAllocator &allocator, ObFTDictHub *hub)
+  ObIKFTParser(ObIAllocator &allocator, ObFTDictHub *hub, bool reuse_documents = false)
       : allocator_(allocator),
+        document_allocator_(ObMemAttr("IKDocument")),
+        document_memory_(reuse_documents ? document_allocator_ : allocator),
         is_inited_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
@@ -53,6 +55,8 @@ public:
   virtual ~ObIKFTParser() { reset(); }
 
   int init(const ObFTParserParam &param);
+  int reuse(const ObFTParserParam &param);
+  void clear_document();
 
   int get_next_token(const char *&word,
                      int64_t &word_len,
@@ -91,6 +95,9 @@ private:
 private:
   static constexpr int SEGMENT_LIMIT = 1000;
   ObIAllocator &allocator_;
+  // Processor objects and dictionary handles outlive this per-document arena.
+  common::ObArenaAllocator document_allocator_;
+  ObIAllocator &document_memory_;
   bool is_inited_;
 
   ObCollationType coll_type_;

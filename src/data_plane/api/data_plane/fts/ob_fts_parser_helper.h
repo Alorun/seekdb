@@ -39,6 +39,7 @@ namespace storage
 class ObStopWordChecker;
 class ObFTDictHub;
 class ObAddWord;
+class FTParseRuntime;
 
 #define FTS_BUILD_IN_PARSER_LIST                                                                   \
   FT_PARSER_TYPE(FTP_SPACE, space)                                                                 \
@@ -161,6 +162,14 @@ public:
       common::ObIAllocator *allocator,
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
+  // Property string fields must remain valid for the helper's lifetime.
+  int init(common::ObIAllocator *allocator, const ObFTParser &parser,
+           const ObFTParserProperty &property);
+  // The map is owned by this helper; its entries are valid until the next segment.
+  // Token bytes still belong to the caller's allocator, as in the original API.
+  int segment(const common::ObObjMeta &meta, const char *fulltext,
+              int64_t fulltext_len, int64_t &doc_length, int64_t bucket_count,
+              ObFTWordMap *&words, bool exact_bucket_count = true) const;
   /**
    * Split document into multiple words
    *
@@ -215,7 +224,10 @@ private:
       const char *fulltext,
       const int64_t fulltext_len,
       common::ObIAllocator &allocator,
-      ObAddWord &add_word);
+      ObAddWord &add_word,
+      FTParseRuntime *runtime,
+      bool is_ik,
+      bool is_beng);
   int set_add_word_flag(const ObIFTParserDesc &ftparser_desc);
 private:
   common::ObIAllocator *allocator_;
@@ -224,6 +236,7 @@ private:
   ObAddWordFlag add_word_flag_;
   ObFTParserProperty parser_property_;
   bool is_inited_;
+  mutable FTParseRuntime *runtime_;
 
 private:
   static constexpr const char *ENTRY_NAME_DOC_LEN = "doc_len";

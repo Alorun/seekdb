@@ -35,6 +35,11 @@ public:
   {
   }
   ~ObIKQuantifierProcessor() override { count_hits_.reset(); }
+  void clear_document() override
+  {
+    count_hits_.reset();
+    reset();
+  }
 
   int do_process(TokenizeContext &ctx,
                  const char *ch,

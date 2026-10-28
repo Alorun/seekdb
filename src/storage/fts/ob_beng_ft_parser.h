@@ -35,6 +35,7 @@ public:
 public:
   explicit ObBEngFTParser(common::ObIAllocator &allocator)
     : allocator_(allocator),
+      token_allocator_(nullptr),
       analysis_ctx_(),
       english_analyzer_(),
       doc_(),
@@ -44,6 +45,8 @@ public:
   ~ObBEngFTParser() { reset(); }
 
   int init(ObFTParserParam *param);
+  int reuse(ObFTParserParam *param);
+  void clear_document();
   void reset();
   virtual int get_next_token(
       const char *&word,
@@ -58,6 +61,7 @@ private:
       share::ObITokenStream *&token_stream);
 private:
   common::ObIAllocator &allocator_;
+  common::ObIAllocator *token_allocator_;
   share::ObTextAnalysisCtx analysis_ctx_;
   share::ObEnglishTextAnalyzer english_analyzer_;
   common::ObDatum doc_;

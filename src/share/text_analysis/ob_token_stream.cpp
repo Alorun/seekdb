@@ -232,7 +232,11 @@ void ObBasicEnglishNormalizer::reset()
 
 void ObBasicEnglishNormalizer::reuse()
 {
-  norm_allocator_.reuse();
+  if (norm_allocator_.total() > (1 << 20)) {
+    norm_allocator_.reset();
+  } else {
+    norm_allocator_.reuse();
+  }
   ObTokenNormalizer::reuse();
 }
 

@@ -68,6 +68,25 @@ int TokenizeContext::init()
   return ret;
 }
 
+void TokenizeContext::clear_document()
+{
+  reset_resource();
+  fulltext_ = nullptr;
+  fulltext_len_ = 0;
+  cursor_ = 0;
+  next_char_len_ = 0;
+  next_char_type_ = ObFTCharUtil::CharType::USELESS;
+}
+
+int TokenizeContext::reuse(const char *fulltext, int64_t fulltext_len, bool is_smart)
+{
+  clear_document();
+  fulltext_ = fulltext;
+  fulltext_len_ = fulltext_len;
+  is_smart_ = is_smart;
+  return init();
+}
+
 int TokenizeContext::reset_resource()
 {
   handle_size_ = 0;

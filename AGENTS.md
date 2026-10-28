@@ -18,3 +18,8 @@
 
 - Prefer adding regression and correctness coverage to the repository's established test suites and test directories.
 - Avoid adding test-only or benchmark-only files under `tools/` unless the task specifically requires a reusable developer tool.
+
+## Development Artifact Cleanup
+
+- After completing feature work or tests, remove build outputs and other development artifacts created during the task that are no longer needed, including temporary test instances and profiling files.
+- Preserve pre-existing or unrelated files and artifacts still needed for ongoing work or verification; do not use broad cleanup commands that could remove them.

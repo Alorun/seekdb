@@ -25,6 +25,11 @@
 
 namespace oceanbase
 {
+namespace storage
+{
+class ObFTParser;
+class ObFTParseHelper;
+}
 namespace sql
 {
 class MultimodeAlloctor;
@@ -47,6 +52,7 @@ public:
                         int64_t param_num,
                         common::ObExprTypeCtx &type_ctx) const override;
   int cg_expr(ObExprCGCtx &op_cg_ctx, const ObRawExpr &raw_expr, ObExpr &rt_expr) const override;
+  bool need_rt_ctx() const override { return true; }
 
 private:
   struct TokenizeParam
@@ -73,6 +79,8 @@ private:
     ObString properties_;
     ObObjMeta meta_;
     ObString fulltext_;
+    const storage::ObFTParser *prepared_parser_;
+    const storage::ObFTParserProperty *prepared_property_;
     enum OUTPUT_MODE
     {
       DEFAULT,
@@ -95,7 +103,7 @@ private:
 
   static int tokenize_fulltext(const TokenizeParam &param,
                                TokenizeParam::OUTPUT_MODE mode,
-                               common::ObIAllocator &allocator,
+                               storage::ObFTParseHelper &helper,
                                ObIJsonBase *&result);
 
   static int construct_ft_parser_inner_name(const ObString &input_str, TokenizeParam &param);
