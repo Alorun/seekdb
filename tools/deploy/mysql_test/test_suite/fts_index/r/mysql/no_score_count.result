@@ -67,4 +67,14 @@ SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
 WHERE MATCH(body) AGAINST('database performance');
 GROUP_CONCAT(id ORDER BY id)
 2,3,4,7
+SELECT COUNT(*) FROM (
+SELECT id FROM docs WHERE MATCH(body) AGAINST('database performance') LIMIT 2
+) limited;
+COUNT(*)
+2
+SELECT COUNT(*) FROM (
+SELECT id FROM docs WHERE MATCH(body) AGAINST('database performance') LIMIT 1, 2
+) limited_offset;
+COUNT(*)
+2
 DROP DATABASE fts_no_score_count;

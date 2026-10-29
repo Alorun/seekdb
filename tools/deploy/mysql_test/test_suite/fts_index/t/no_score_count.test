@@ -41,4 +41,10 @@ INSERT INTO docs VALUES (7, 'performance');
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('database performance');
 SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
   WHERE MATCH(body) AGAINST('database performance');
+SELECT COUNT(*) FROM (
+  SELECT id FROM docs WHERE MATCH(body) AGAINST('database performance') LIMIT 2
+) limited;
+SELECT COUNT(*) FROM (
+  SELECT id FROM docs WHERE MATCH(body) AGAINST('database performance') LIMIT 1, 2
+) limited_offset;
 DROP DATABASE fts_no_score_count;

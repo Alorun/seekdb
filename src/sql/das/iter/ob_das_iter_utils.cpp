@@ -1095,6 +1095,9 @@ int ObDASIterUtils::create_text_retrieval_tree(ObTableScanParam &scan_param,
     }
     const bool has_sort = nullptr != sort_ctdef;
     const bool need_rewind = true;
+    if (has_lookup && !has_sort && !ir_scan_ctdef->need_calc_relevance()) {
+      static_cast<ObDASTextRetrievalMergeIter *>(text_retrieval_result)->set_limit_after_lookup();
+    }
     if (!has_sort) {
       // skip
     } else if (OB_FAIL(create_sort_sub_tree(alloc, sort_ctdef, sort_rtdef, need_rewind, false/*need_distinct*/,text_retrieval_result, sort_result))) {

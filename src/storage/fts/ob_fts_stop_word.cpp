@@ -27,6 +27,28 @@ namespace oceanbase
 namespace storage
 {
 
+namespace
+{
+bool is_ascii_lower_token(const ObString &word)
+{
+  bool is_ascii_lower = !word.empty();
+  for (int64_t i = 0; is_ascii_lower && i < word.length(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(word.ptr()[i]);
+    is_ascii_lower = c < 0x80 && !(c >= 'A' && c <= 'Z');
+  }
+  return is_ascii_lower;
+}
+
+bool is_ascii_token(const ObString &word)
+{
+  bool is_ascii = true;
+  for (int64_t i = 0; is_ascii && i < word.length(); ++i) {
+    is_ascii = static_cast<unsigned char>(word.ptr()[i]) < 0x80;
+  }
+  return is_ascii;
+}
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // class ObStopWordChecker
 ObStopWordChecker::~ObStopWordChecker()
@@ -74,25 +96,38 @@ void ObStopWordChecker::destroy()
 int ObStopWordChecker::check_stopword(const ObFTWord &word, bool &is_stopword)
 {
   int ret = OB_SUCCESS;
-  
-  
-  common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));
   if (OB_UNLIKELY(!inited_)) {
     ret = OB_NOT_INIT;
   } else if (OB_UNLIKELY(word.empty())) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    common::ObString cmp_str;
-    // do nothing set out with in if type is the same.
-    if (OB_FAIL(common::ObCharset::charset_convert(
-                                       allocator,
-                                       word.get_word().get_string(),
-                                       word.get_collation_type(),
-                                       stopword_type_.get_collation_type(),
-                                       cmp_str))) {
+    const ObString source = word.get_word().get_string();
+    ObFTWord converted;
+    const ObFTWord *lookup_word = &word;
+    if (word.get_collation_type() == stopword_type_.get_collation_type()) {
+      // The hash key already uses the stopword collation.
+    } else if (ObCharset::get_charset(word.get_collation_type())
+                   == ObCharset::get_charset(stopword_type_.get_collation_type())
+               && is_ascii_token(source)) {
+      // ASCII bytes have identical code points across collations of one charset.
+      converted = ObFTWord(source.length(), source.ptr(), stopword_type_);
+      lookup_word = &converted;
     } else {
-      ObFTWord converted(cmp_str.length(), cmp_str.ptr(), stopword_type_);
-      ret = stopword_set_.exist_refactored(converted);
+      common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));
+      common::ObString cmp_str;
+      if (OB_FAIL(common::ObCharset::charset_convert(
+                      allocator,
+                      source,
+                      word.get_collation_type(),
+                      stopword_type_.get_collation_type(),
+                      cmp_str))) {
+      } else {
+        converted = ObFTWord(cmp_str.length(), cmp_str.ptr(), stopword_type_);
+        lookup_word = &converted;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      ret = stopword_set_.exist_refactored(*lookup_word);
       if (OB_HASH_NOT_EXIST == ret) {
         is_stopword = false;
         ret = OB_SUCCESS;
@@ -164,15 +199,20 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
   if (OB_UNLIKELY(src.empty())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (flag_.casedown()) {
-    ObString dst_str;
-    if (OB_FAIL(ObCharset::tolower(
-                    word_meta_.get_collation_type(),
-                    src.get_word().get_string(),
-                    dst_str,
-                    allocator_))) {
+    const ObString source = src.get_word().get_string();
+    const ObCollationType collation = word_meta_.get_collation_type();
+    const bool utf8mb4_ascii = (collation == CS_TYPE_UTF8MB4_BIN
+                                || collation == CS_TYPE_UTF8MB4_GENERAL_CI)
+                               && is_ascii_lower_token(source);
+    if (utf8mb4_ascii) {
+      dst = src;
     } else {
-      ObFTWord tmp(dst_str.length(), dst_str.ptr(), word_meta_);
-      dst = tmp;
+      ObString dst_str;
+      if (OB_FAIL(ObCharset::tolower(collation, source, dst_str, allocator_))) {
+      } else {
+        ObFTWord tmp(dst_str.length(), dst_str.ptr(), word_meta_);
+        dst = tmp;
+      }
     }
   } else {
     dst = src;
