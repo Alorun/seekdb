@@ -5,6 +5,7 @@ CREATE DATABASE fts_ik_candidate;
 USE fts_ik_candidate;
 
 SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_overlap;
+SELECT tokenize(_utf8mb4'中华人民共和国人民大会堂' COLLATE utf8mb4_general_ci, 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS general_ci_overlap;
 SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_overlap;
 SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_ambiguous;
 SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_ambiguous;
@@ -41,5 +42,16 @@ INSERT INTO docs_max VALUES
   (4, '无关文档');
 SELECT GROUP_CONCAT(id ORDER BY id) AS max_hits FROM docs_max
   WHERE MATCH(body) AGAINST('研究生命');
+
+CREATE TABLE docs_general_ci (
+  id INT PRIMARY KEY,
+  body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER ik
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+INSERT INTO docs_general_ci VALUES
+  (1, '中华人民共和国人民大会堂'),
+  (2, '人民大会堂');
+SELECT GROUP_CONCAT(id ORDER BY id) AS general_ci_hits FROM docs_general_ci
+  WHERE MATCH(body) AGAINST('人民大会堂');
 
 DROP DATABASE fts_ik_candidate;

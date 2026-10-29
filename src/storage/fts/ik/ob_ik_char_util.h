@@ -52,6 +52,11 @@ public:
                                  const uint8_t char_len,
                                  CharType &type);
 
+  static int classify_first_utf8mb4_char(const char *input,
+                                         const int64_t input_len,
+                                         int64_t &char_len,
+                                         CharType &type);
+
   static int check_cn_number(ObCollationType coll_type,
                              const char *input,
                              const uint8_t char_len,
@@ -76,6 +81,8 @@ public:
 private:
   template <ObCharsetType CS_TYPE>
   static int do_classify(const char *input, const uint8_t char_len, CharType &type);
+
+  static CharType classify_utf8mb4_unicode_(const ob_wc_t unicode);
 
 private:
   /*************************  Alpha: english letter abc *********************/
@@ -441,31 +448,81 @@ inline int ObFTCharUtil::is_ignore_single_cjk(ObCollationType coll_type,
   return ret;
 }
 
+inline ObFTCharUtil::CharType ObFTCharUtil::classify_utf8mb4_unicode_(const ob_wc_t unicode)
+{
+  CharType type = CharType::USELESS;
+  if (ObUnicodeBlockUtils::is_alpha(unicode)) {
+    type = CharType::ENGLISH_LETTER;
+  } else if (ObUnicodeBlockUtils::is_arabic(unicode)) {
+    type = CharType::ARABIC_LETTER;
+  } else if (ObUnicodeBlockUtils::is_chinese(unicode)) {
+    type = CharType::CHINESE;
+  } else if (ObUnicodeBlockUtils::is_other_cjk(unicode)) {
+    type = CharType::OTHER_CJK;
+  }
+  return type;
+}
+
 template <ObCharsetType CS_TYPE>
 inline int ObFTCharUtil::do_classify(const char *input, const uint8_t char_len, CharType &type)
 {
   int ret = OB_SUCCESS;
-  bool checker = false;
   type = CharType::USELESS;
 
-  if (OB_FAIL(is_alpha<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::ENGLISH_LETTER;
-  } else if (OB_FAIL(is_arabic<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::ARABIC_LETTER;
-  } else if (OB_FAIL(is_chinese<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::CHINESE;
-  } else if (OB_FAIL(is_other_cjk<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::OTHER_CJK;
-  } else if (OB_FAIL(is_surrogate_high<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::SURROGATE_HIGH;
-  } else if (OB_FAIL(is_surrogate_low<CS_TYPE>(input, char_len, checker))) {
-  } else if (checker) {
-    type = CharType::SURROGATE_LOW;
+  if constexpr (CS_TYPE == CHARSET_UTF8MB4) {
+    // All UTF8MB4 character classes come from the same decoded code point.
+    ob_wc_t unicode = 0;
+    if (OB_FAIL(decode_unicode<CS_TYPE>(input, char_len, unicode))) {
+    } else {
+      type = classify_utf8mb4_unicode_(unicode);
+    }
+  } else {
+    bool checker = false;
+    if (OB_FAIL(is_alpha<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::ENGLISH_LETTER;
+    } else if (OB_FAIL(is_arabic<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::ARABIC_LETTER;
+    } else if (OB_FAIL(is_chinese<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::CHINESE;
+    } else if (OB_FAIL(is_other_cjk<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::OTHER_CJK;
+    } else if (OB_FAIL(is_surrogate_high<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::SURROGATE_HIGH;
+    } else if (OB_FAIL(is_surrogate_low<CS_TYPE>(input, char_len, checker))) {
+    } else if (checker) {
+      type = CharType::SURROGATE_LOW;
+    }
+  }
+  return ret;
+}
+
+inline int ObFTCharUtil::classify_first_utf8mb4_char(const char *input,
+                                                      const int64_t input_len,
+                                                      int64_t &char_len,
+                                                      CharType &type)
+{
+  int ret = OB_SUCCESS;
+  char_len = 0;
+  type = CharType::USELESS;
+  if (OB_ISNULL(input) || input_len <= 0) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    const unsigned char *start = reinterpret_cast<const unsigned char *>(input);
+    ob_wc_t unicode = 0;
+    const int decoded_len = common::ob_charset_decode_unicode<CHARSET_UTF8MB4>(
+        start, start + input_len, unicode);
+    if (decoded_len <= 0) {
+      ret = OB_INVALID_ARGUMENT;
+      STORAGE_FTS_LOG(WARN, "invalid encoding found", K(decoded_len), K(input_len));
+    } else {
+      char_len = decoded_len;
+      type = ObFTCharUtil::classify_utf8mb4_unicode_(unicode);
+    }
   }
   return ret;
 }

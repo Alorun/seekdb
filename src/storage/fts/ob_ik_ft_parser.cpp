@@ -169,11 +169,11 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
                                    const ObFTCharUtil::CharType type)
 {
   int ret = OB_SUCCESS;
-  // proces by char with all segmenters
+  // Reuse the character metadata computed once by TokenizeContext.
   for (ObList<ObIIKProcessor *, ObIAllocator>::iterator iter = segmenters_.begin();
        OB_SUCC(ret) && iter != segmenters_.end();
        iter++) {
-    if (OB_FAIL((*iter)->process(ctx))) {
+    if (OB_FAIL((*iter)->do_process(ctx, ch, char_len, type))) {
     }
   }
   return ret;
@@ -351,6 +351,11 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
   ObIKQuantifierProcessor *cnqsg = nullptr;
   ObIKCJKProcessor *cjksg = nullptr;
   ObIKSurrogateProcessor *surrogate_seg = nullptr;
+  // Both collations decode the dictionary's exact UTF8 code points identically.
+  const bool use_candidate_automaton =
+      (ObCollationType::CS_TYPE_UTF8MB4_BIN == coll_type_
+       || ObCollationType::CS_TYPE_UTF8MB4_GENERAL_CI == coll_type_)
+      && IKCandidateAutomaton::get_instance().is_ready();
   if (OB_ISNULL(letter_seg = OB_NEWx(ObIKLetterProcessor, &allocator_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else if (OB_ISNULL(dict_quan_)) {
@@ -363,8 +368,7 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
                                         &allocator_,
                                         *dict_main_,
                                         document_memory_,
-                                        ObCollationType::CS_TYPE_UTF8MB4_BIN == coll_type_
-                                            && IKCandidateAutomaton::get_instance().is_ready()
+                                        use_candidate_automaton
                                             ? &IKCandidateAutomaton::get_instance() : nullptr))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else if (OB_ISNULL(surrogate_seg = OB_NEWx(ObIKSurrogateProcessor, &allocator_))) {
