@@ -12184,7 +12184,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
   bool need_calc_relevance = true;
-  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12251,18 +12250,56 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    /*
-    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
-                                                              get_stmt(),
-                                                              match_against,
-                                                              need_calc_relevance,
-                                                              constraints))) {
-      LOG_WARN("failed to check need calc relevance", K(ret));
-    } else if (!need_calc_relevance &&
-               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
-      LOG_WARN("failed to append array no dup", K(ret));
+    // Retrieval alone is sufficient only when every MATCH use is a direct
+    // WHERE predicate. Inspect the other statement scopes separately, since
+    // relation-expression deduplication can hide a shared SELECT/WHERE root.
+    const ObSelectStmt *select_stmt = get_stmt()->is_select_stmt()
+                                       ? static_cast<const ObSelectStmt *>(get_stmt()) : nullptr;
+    if (nullptr != select_stmt && select_stmt->is_scala_group_by()
+        && select_stmt->get_aggr_item_size() == 1
+        && nullptr != select_stmt->get_aggr_items().at(0)
+        && select_stmt->get_aggr_items().at(0)->get_expr_type() == T_FUN_COUNT
+        && select_stmt->get_aggr_items().at(0)->get_real_param_exprs().empty()
+        && select_stmt->get_condition_exprs().count() == 1
+        && select_stmt->get_table_size() == 1
+        && select_stmt->get_table_item(0)->is_basic_table()
+        && select_stmt->get_subquery_expr_size() == 0
+        && match_against->get_mode_flag() == NATURAL_LANGUAGE_MODE) {
+      ObSEArray<ObRawExpr *, 8> other_exprs;
+      ObStmtExprGetter visitor;
+      visitor.set_relation_scope();
+      visitor.remove_scope(SCOPE_WHERE);
+      bool direct_predicate = false;
+      bool score_used = false;
+      if (OB_FAIL(select_stmt->get_relation_exprs(other_exprs, visitor))) {
+        LOG_WARN("failed to get non-filter expressions", K(ret));
+      }
+      for (int64_t i = 0; OB_SUCC(ret) && !score_used && i < other_exprs.count(); ++i) {
+        ObSEArray<ObMatchFunRawExpr *, 2> matches;
+        if (OB_FAIL(ObRawExprUtils::extract_match_exprs(other_exprs.at(i), matches))) {
+          LOG_WARN("failed to extract match expressions", K(ret));
+        } else {
+          score_used = !matches.empty();
+        }
+      }
+      const ObIArray<ObRawExpr *> &conditions = select_stmt->get_condition_exprs();
+      for (int64_t i = 0; OB_SUCC(ret) && !score_used && i < conditions.count(); ++i) {
+        ObRawExpr *condition = conditions.at(i);
+        if (condition == match_against
+            || (condition->get_expr_type() == T_OP_BOOL && condition->get_param_count() == 1
+                && condition->get_param_expr(0) == match_against)) {
+          direct_predicate = true;
+        } else {
+          ObSEArray<ObMatchFunRawExpr *, 2> matches;
+          if (OB_FAIL(ObRawExprUtils::extract_match_exprs(condition, matches))) {
+            LOG_WARN("failed to extract filter match expressions", K(ret));
+          } else {
+            score_used = !matches.empty();
+          }
+        }
+      }
+      need_calc_relevance = !direct_predicate || score_used;
     }
-    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;
