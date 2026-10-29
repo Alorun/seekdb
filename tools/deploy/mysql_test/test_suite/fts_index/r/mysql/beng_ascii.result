@@ -7,6 +7,9 @@ repeated
 SELECT tokenize('---HeLLo---', 'beng', '[{"output": "all"}]') AS punctuation;
 punctuation
 {"tokens": [{"hello": 1}], "doc_len": 1}
+SELECT tokenize('!!! alpha --- beta', 'beng', '[{"output": "all"}]') AS leading_delimiters;
+leading_delimiters
+{"tokens": [{"alpha": 1}, {"beta": 1}], "doc_len": 2}
 SELECT tokenize('Delta alpha delta beta ALPHA!', 'beng', '[{"output": "all"}]') AS order_and_case;
 order_and_case
 {"tokens": [{"delta": 2}, {"alpha": 2}, {"beta": 1}], "doc_len": 5}

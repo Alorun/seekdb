@@ -6,6 +6,7 @@ USE fts_beng_ascii;
 
 SELECT tokenize('HELLO hello HELLO', 'beng', '[{"output": "all"}]') AS repeated;
 SELECT tokenize('---HeLLo---', 'beng', '[{"output": "all"}]') AS punctuation;
+SELECT tokenize('!!! alpha --- beta', 'beng', '[{"output": "all"}]') AS leading_delimiters;
 SELECT tokenize('Delta alpha delta beta ALPHA!', 'beng', '[{"output": "all"}]') AS order_and_case;
 SELECT tokenize('A..B 123 45x _foo_ foo-bar', 'beng', '[{"output": "all"}]') AS ascii_boundaries;
 SELECT tokenize(CONCAT('one', CHAR(9), 'two', CHAR(10), 'three'), 'beng', '[{"output": "all"}]') AS controls;

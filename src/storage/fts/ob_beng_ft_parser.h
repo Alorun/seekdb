@@ -42,6 +42,7 @@ public:
       token_stream_(nullptr),
       ascii_buf_(nullptr),
       ascii_pos_(0),
+      ascii_buffer_pos_(0),
       ascii_mode_(false),
       is_inited_(false)
   {}
@@ -73,6 +74,7 @@ private:
   share::ObITokenStream *token_stream_;
   char *ascii_buf_;
   int64_t ascii_pos_;
+  int64_t ascii_buffer_pos_;
   bool ascii_mode_;
   bool is_inited_;
 
