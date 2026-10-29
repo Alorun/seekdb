@@ -1,0 +1,44 @@
+# COUNT(*) may use the unscored full-text retrieval path. Other uses of MATCH
+# continue to require a relevance score or a table lookup.
+--disable_warnings
+DROP DATABASE IF EXISTS fts_no_score_count;
+--enable_warnings
+CREATE DATABASE fts_no_score_count;
+USE fts_no_score_count;
+CREATE TABLE docs (id INT PRIMARY KEY, body TEXT,
+                   FULLTEXT INDEX ft(body) WITH PARSER beng);
+INSERT INTO docs VALUES
+  (1, 'database database performance'),
+  (2, 'database audit'),
+  (3, 'performance audit'),
+  (4, 'unrelated document'),
+  (5, ''),
+  (6, NULL);
+
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('database performance');
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('');
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('the and');
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('absentword');
+SELECT COUNT(*) FROM docs
+  WHERE MATCH(body) AGAINST('database performance') AND id >= 2;
+SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
+  WHERE MATCH(body) AGAINST('database performance');
+SELECT COUNT(*) FROM docs
+  WHERE MATCH(body) AGAINST('database performance') > 0.1;
+SELECT id, MATCH(body) AGAINST('database performance') AS score
+  FROM docs WHERE MATCH(body) AGAINST('database performance') ORDER BY id;
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('+database -audit' IN BOOLEAN MODE);
+
+PREPARE q FROM 'SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST(?)';
+SET @q='database performance'; EXECUTE q USING @q;
+SET @q=''; EXECUTE q USING @q;
+SET @q='audit'; EXECUTE q USING @q;
+DEALLOCATE PREPARE q;
+
+UPDATE docs SET body='database' WHERE id=4;
+DELETE FROM docs WHERE id=1;
+INSERT INTO docs VALUES (7, 'performance');
+SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('database performance');
+SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
+  WHERE MATCH(body) AGAINST('database performance');
+DROP DATABASE fts_no_score_count;
