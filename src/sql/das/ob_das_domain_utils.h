@@ -58,6 +58,11 @@ private:
   uint64_t row_idx_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
+  // Row datum buffers outlive the per-document merge arena.
+  common::ObArenaAllocator row_allocator_;
+  blocksstable::ObDatumRow *row_buffer_;
+  int64_t row_capacity_;
+  int64_t cached_row_count_;
   bool is_inited_;
 
   DISALLOW_COPY_AND_ASSIGN(ObFTIndexRowCache);
@@ -187,6 +192,15 @@ public:
                                          const ObString &fulltext,
                                          const bool is_fts_index_aux,
                                          ObDomainIndexRow &word_rows);
+  static int generate_fulltext_word_rows_from_map(
+      common::ObIAllocator &allocator,
+      const storage::ObFTWordMap &ft_word_map,
+      const int64_t doc_length,
+      const ObDatum &doc_id_datum,
+      const bool is_fts_index_aux,
+      ObDomainIndexRow &word_rows,
+      blocksstable::ObDatumRow *reusable_rows = nullptr,
+      int64_t reusable_row_capacity = 0);
   static int generate_multivalue_index_rows(
       ObIAllocator &allocator,
       const ObDASDMLBaseCtDef &das_ctdef,
