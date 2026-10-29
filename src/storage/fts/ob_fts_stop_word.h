@@ -78,7 +78,8 @@ public:
 
   int init();
   void destroy();
-  int check_stopword(const ObFTWord &word, bool &is_stopword);
+  int check_stopword(const ObFTWord &word, bool &is_stopword,
+                     bool is_ascii_lowercase = false);
 
 private:
   static const int64_t DEFAULT_STOPWORD_BUCKET_NUM = 37L;
@@ -107,7 +108,8 @@ public:
       const char *word,
       const int64_t word_len,
       const int64_t char_cnt,
-      const int64_t word_freq);
+      const int64_t word_freq,
+      const bool is_ascii_lowercase = false);
   virtual int64_t get_add_word_count() const { return non_stopword_cnt_; }
   VIRTUAL_TO_STRING_KV(
       K_(word_meta),
@@ -120,8 +122,8 @@ public:
 
 private:
   bool is_min_max_word(const int64_t c_len) const;
-  int casedown_word(const ObFTWord &src, ObFTWord &dst);
-  int check_stopword(const ObFTWord &word, bool &is_stopword);
+  int casedown_word(const ObFTWord &src, ObFTWord &dst, bool is_ascii_lowercase);
+  int check_stopword(const ObFTWord &word, bool &is_stopword, bool is_ascii_lowercase);
   int groupby_word(const ObFTWord &word, const int64_t word_cnt);
 private:
   ObObjMeta word_meta_;

@@ -406,11 +406,15 @@ int ObFTParseHelper::segment(
       int64_t word_len = 0;
       int64_t char_cnt = 0;
       int64_t word_freq = 0;
+      // BENG's ASCII mode emits already-lowercased alphanumeric tokens.
+      const bool ascii_lower_tokens = is_beng
+          && static_cast<ObBEngFTParser *>(iter)->ascii_mode();
       while (OB_SUCC(ret)) {
         if (OB_FAIL(iter->get_next_token(word, word_len, char_cnt, word_freq))) {
           if (OB_ITER_END != ret) {
           }
-        } else if (OB_FAIL(add_word.process_word(word, word_len, char_cnt, word_freq))) {
+        } else if (OB_FAIL(add_word.process_word(word, word_len, char_cnt, word_freq,
+                                                 ascii_lower_tokens))) {
         }
       }
       if (OB_ITER_END == ret) {
@@ -561,8 +565,6 @@ int ObFTParseHelper::segment(
       doc_length = add_word.get_add_word_count();
     }
   }
-  LOG_DEBUG("ft parse segment", K(ret), K(type), K(add_word_flag_), K(parser_name_),
-      K(ObString(fulltext_len, fulltext)), K(words.size()));
   return ret;
 }
 

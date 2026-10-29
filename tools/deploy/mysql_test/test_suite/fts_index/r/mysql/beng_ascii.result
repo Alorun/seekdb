@@ -22,6 +22,9 @@ bin_collation
 SELECT tokenize(_utf8mb4'THE' COLLATE utf8mb4_bin, 'beng', '[{"output": "all"}]') AS bin_stopword;
 bin_stopword
 {"tokens": [], "doc_len": 0}
+SELECT tokenize(_utf8mb4'ARE COM for FROM How THAT the THiS WAS WhAT when WHERE who WILL With UND www ABOUT database' COLLATE utf8mb4_general_ci, 'beng', '[{"output": "all"}]') AS ascii_stopwords;
+ascii_stopwords
+{"tokens": [{"database": 1}], "doc_len": 1}
 SELECT tokenize(BINARY 'Alpha beta alpha', 'beng', '[{"output": "all"}]') AS fallback_collation;
 fallback_collation
 {"tokens": [{"beta": 1}, {"Alpha": 1}, {"alpha": 1}], "doc_len": 3}

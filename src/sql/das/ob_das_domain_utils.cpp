@@ -98,7 +98,6 @@ int ObFTIndexRowCache::segment(const common::ObObjMeta &ft_obj_meta,
   } else {
     row_idx_ = 0;
   }
-  LOG_TRACE("word segment", K(ret), K(row_idx_), K(rows_.count()), K(doc_id_datum), K(fulltext));
   return ret;
 }
 
@@ -113,7 +112,6 @@ int ObFTIndexRowCache::get_next_row(blocksstable::ObDatumRow *&row)
     row = (rows_[row_idx_]);
     ++row_idx_;
   }
-  LOG_TRACE("get next row", K(ret), KPC(row), K(row_idx_), K(rows_.count()));
   return ret;
 }
 
@@ -297,6 +295,7 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
                                     false/*index storage does not expose hash iteration order*/))) {
   } else if (0 == ft_word_map->size()) {
     ret = OB_ITER_END;
+  } else if (OB_FAIL(word_rows.reserve(word_rows.count() + ft_word_map->size()))) {
   } else if (OB_ISNULL(rows_buf = reinterpret_cast<char *>(
                            allocator.alloc(ft_word_map->size() * sizeof(blocksstable::ObDatumRow))))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;

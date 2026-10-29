@@ -50,6 +50,7 @@ public:
   int init(ObFTParserParam *param);
   int reuse(ObFTParserParam *param);
   void clear_document();
+  bool ascii_mode() const { return ascii_mode_; }
   void reset();
   virtual int get_next_token(
       const char *&word,

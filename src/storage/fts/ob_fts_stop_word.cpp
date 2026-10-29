@@ -47,6 +47,65 @@ bool is_ascii_token(const ObString &word)
   }
   return is_ascii;
 }
+
+bool is_builtin_ascii_stopword(const ObString &word)
+{
+  bool is_stopword = false;
+  const char *text = word.ptr();
+  switch (word.length()) {
+  case 1:
+    is_stopword = 'a' == text[0] || 'i' == text[0];
+    break;
+  case 2:
+    switch (text[0]) {
+    case 'a': is_stopword = 'n' == text[1] || 's' == text[1] || 't' == text[1]; break;
+    case 'b': is_stopword = 'e' == text[1] || 'y' == text[1]; break;
+    case 'd': is_stopword = 'e' == text[1]; break;
+    case 'e': is_stopword = 'n' == text[1]; break;
+    case 'i': is_stopword = 'n' == text[1] || 's' == text[1] || 't' == text[1]; break;
+    case 'l': is_stopword = 'a' == text[1]; break;
+    case 'o': is_stopword = 'f' == text[1] || 'n' == text[1] || 'r' == text[1]; break;
+    case 't': is_stopword = 'o' == text[1]; break;
+    default: break;
+    }
+    break;
+  case 3:
+    switch (text[0]) {
+    case 'a': is_stopword = 0 == MEMCMP(text, "are", 3); break;
+    case 'c': is_stopword = 0 == MEMCMP(text, "com", 3); break;
+    case 'f': is_stopword = 0 == MEMCMP(text, "for", 3); break;
+    case 'h': is_stopword = 0 == MEMCMP(text, "how", 3); break;
+    case 't': is_stopword = 0 == MEMCMP(text, "the", 3); break;
+    case 'u': is_stopword = 0 == MEMCMP(text, "und", 3); break;
+    case 'w': is_stopword = 0 == MEMCMP(text, "was", 3)
+                              || 0 == MEMCMP(text, "who", 3)
+                              || 0 == MEMCMP(text, "www", 3); break;
+    default: break;
+    }
+    break;
+  case 4:
+    switch (text[0]) {
+    case 'f': is_stopword = 0 == MEMCMP(text, "from", 4); break;
+    case 't': is_stopword = 0 == MEMCMP(text, "that", 4)
+                              || 0 == MEMCMP(text, "this", 4); break;
+    case 'w': is_stopword = 0 == MEMCMP(text, "what", 4)
+                              || 0 == MEMCMP(text, "when", 4)
+                              || 0 == MEMCMP(text, "will", 4)
+                              || 0 == MEMCMP(text, "with", 4); break;
+    default: break;
+    }
+    break;
+  case 5:
+    is_stopword = 0 == MEMCMP(text, "about", 5)
+                  || 0 == MEMCMP(text, "where", 5);
+    break;
+  default:
+    break;
+  }
+  return is_stopword;
+}
+
+static constexpr int64_t MAX_BUILTIN_ASCII_STOPWORD_LENGTH = 5;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -93,7 +152,9 @@ void ObStopWordChecker::destroy()
   }
 }
 
-int ObStopWordChecker::check_stopword(const ObFTWord &word, bool &is_stopword)
+int ObStopWordChecker::check_stopword(const ObFTWord &word,
+                                      bool &is_stopword,
+                                      const bool is_ascii_lowercase)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(!inited_)) {
@@ -102,41 +163,46 @@ int ObStopWordChecker::check_stopword(const ObFTWord &word, bool &is_stopword)
     ret = OB_INVALID_ARGUMENT;
   } else {
     const ObString source = word.get_word().get_string();
-    ObFTWord converted;
-    const ObFTWord *lookup_word = &word;
-    if (word.get_collation_type() == stopword_type_.get_collation_type()) {
-      // The hash key already uses the stopword collation.
-    } else if (ObCharset::get_charset(word.get_collation_type())
-                   == ObCharset::get_charset(stopword_type_.get_collation_type())
-               && is_ascii_token(source)) {
-      // ASCII bytes have identical code points across collations of one charset.
-      converted = ObFTWord(source.length(), source.ptr(), stopword_type_);
-      lookup_word = &converted;
+    if (is_ascii_lowercase && source.length() > MAX_BUILTIN_ASCII_STOPWORD_LENGTH) {
+      is_stopword = false;
+    } else if (is_ascii_lowercase) {
+      is_stopword = is_builtin_ascii_stopword(source);
     } else {
-      common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));
-      common::ObString cmp_str;
-      if (OB_FAIL(common::ObCharset::charset_convert(
-                      allocator,
-                      source,
-                      word.get_collation_type(),
-                      stopword_type_.get_collation_type(),
-                      cmp_str))) {
-      } else {
-        converted = ObFTWord(cmp_str.length(), cmp_str.ptr(), stopword_type_);
+      ObFTWord converted;
+      const ObFTWord *lookup_word = &word;
+      if (word.get_collation_type() == stopword_type_.get_collation_type()) {
+        // The hash key already uses the stopword collation.
+      } else if (ObCharset::get_charset(word.get_collation_type())
+                     == ObCharset::get_charset(stopword_type_.get_collation_type())
+                 && is_ascii_token(source)) {
+        // ASCII bytes have identical code points across collations of one charset.
+        converted = ObFTWord(source.length(), source.ptr(), stopword_type_);
         lookup_word = &converted;
-      }
-    }
-    if (OB_SUCC(ret)) {
-      ret = stopword_set_.exist_refactored(*lookup_word);
-      if (OB_HASH_NOT_EXIST == ret) {
-        is_stopword = false;
-        ret = OB_SUCCESS;
-      } else if (OB_HASH_EXIST == ret) {
-        is_stopword = true;
-        ret = OB_SUCCESS;
-      } else if (OB_SUCC(ret)) {
-        ret = OB_ERR_UNEXPECTED;
       } else {
+        common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));
+        common::ObString cmp_str;
+        if (OB_FAIL(common::ObCharset::charset_convert(
+                        allocator,
+                        source,
+                        word.get_collation_type(),
+                        stopword_type_.get_collation_type(),
+                        cmp_str))) {
+        } else {
+          converted = ObFTWord(cmp_str.length(), cmp_str.ptr(), stopword_type_);
+          lookup_word = &converted;
+        }
+      }
+      if (OB_SUCC(ret)) {
+        ret = stopword_set_.exist_refactored(*lookup_word);
+        if (OB_HASH_NOT_EXIST == ret) {
+          is_stopword = false;
+          ret = OB_SUCCESS;
+        } else if (OB_HASH_EXIST == ret) {
+          is_stopword = true;
+          ret = OB_SUCCESS;
+        } else if (OB_SUCC(ret)) {
+          ret = OB_ERR_UNEXPECTED;
+        }
       }
     }
   }
@@ -167,7 +233,8 @@ int ObAddWord::process_word(
     const char *word,
     const int64_t word_len,
     const int64_t char_cnt,
-    const int64_t word_freq)
+    const int64_t word_freq,
+    const bool is_ascii_lowercase)
 {
   int ret = OB_SUCCESS;
   bool is_stopword = false;
@@ -177,8 +244,8 @@ int ObAddWord::process_word(
     ret = OB_INVALID_ARGUMENT;
   } else if (is_min_max_word(char_cnt)) {
     ++min_max_word_cnt_;
-  } else if (OB_FAIL(casedown_word(src_word, dst_word))) {
-  } else if (OB_FAIL(check_stopword(dst_word, is_stopword))) {
+  } else if (OB_FAIL(casedown_word(src_word, dst_word, is_ascii_lowercase))) {
+  } else if (OB_FAIL(check_stopword(dst_word, is_stopword, is_ascii_lowercase))) {
   } else if (OB_UNLIKELY(is_stopword)) {
     ++stopword_cnt_;
   } else if (OB_FAIL(groupby_word(dst_word, word_freq))) {
@@ -193,7 +260,9 @@ bool ObAddWord::is_min_max_word(const int64_t c_len) const
   return flag_.min_max_word() && (c_len < min_token_size_ || c_len > max_token_size_);
 }
 
-int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
+int ObAddWord::casedown_word(const ObFTWord &src,
+                             ObFTWord &dst,
+                             const bool is_ascii_lowercase)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(src.empty())) {
@@ -203,7 +272,7 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
     const ObCollationType collation = word_meta_.get_collation_type();
     const bool utf8mb4_ascii = (collation == CS_TYPE_UTF8MB4_BIN
                                 || collation == CS_TYPE_UTF8MB4_GENERAL_CI)
-                               && is_ascii_lower_token(source);
+                               && (is_ascii_lowercase || is_ascii_lower_token(source));
     if (utf8mb4_ascii) {
       dst = src;
     } else {
@@ -220,7 +289,9 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
   return ret;
 }
 
-int ObAddWord::check_stopword(const ObFTWord &ft_word, bool &is_stopword)
+int ObAddWord::check_stopword(const ObFTWord &ft_word,
+                              bool &is_stopword,
+                              const bool is_ascii_lowercase)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(ft_word.empty())) {
@@ -229,7 +300,8 @@ int ObAddWord::check_stopword(const ObFTWord &ft_word, bool &is_stopword)
     ObStopWordChecker *stop_word_checker = ObFTParseData::instance().stop_word_checker();
     if (OB_ISNULL(stop_word_checker)) {
       ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(stop_word_checker->check_stopword(ft_word, is_stopword))) {
+    } else if (OB_FAIL(stop_word_checker->check_stopword(ft_word, is_stopword,
+                                                        is_ascii_lowercase))) {
     }
   }
   return ret;
