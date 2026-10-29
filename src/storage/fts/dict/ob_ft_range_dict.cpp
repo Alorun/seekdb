@@ -36,6 +36,7 @@
 #include "storage/fts/dict/ob_ft_dict_iterator.h"
 #include "storage/fts/dict/ob_ft_dict_table_iter.h"
 #include "storage/fts/dict/ob_ft_trie.h"
+#include "storage/fts/ik/ob_ik_candidate_automaton.h"
 
 #define USING_LOG_PREFIX STORAGE_FTS
 
@@ -68,6 +69,16 @@ int ObFTRangeDict::build_cache_from_ik_dict(const ObFTDictDesc &desc, ObFTCacheR
     ObIKDictIterator iter(raw_dict);
     if (OB_FAIL(iter.init())) {
     } else if (OB_FAIL(ObFTRangeDict::build_ranges_concurrently_thread_pool(desc, iter, range_container))) {
+    }
+  }
+
+  if (OB_SUCC(ret) && ObFTDictType::DICT_IK_MAIN == desc.type_
+      && ObCollationType::CS_TYPE_UTF8MB4_BIN == desc.coll_type_) {
+    const int64_t memory_budget = MIN(INT64_C(128) * 1024 * 1024,
+                                      lib::get_memory_budget() / 16);
+    const int automaton_ret = IKCandidateAutomaton::get_instance().build_if_needed(raw_dict, memory_budget);
+    if (OB_FAIL(automaton_ret)) {
+      LOG_WARN("IK candidate automaton unavailable; keep DAT matcher", K(automaton_ret), K(memory_budget));
     }
   }
 

@@ -30,6 +30,7 @@
 #include "storage/fts/dict/ob_ft_dict_hub.h"
 #include "storage/fts/dict/ob_ft_range_dict.h"
 #include "storage/fts/ik/ob_ik_arbitrator.h"
+#include "storage/fts/ik/ob_ik_candidate_automaton.h"
 #include "storage/fts/ik/ob_ik_cjk_processor.h"
 #include "storage/fts/ik/ob_ik_letter_processor.h"
 #include "storage/fts/ik/ob_ik_processor.h"
@@ -358,7 +359,13 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else if (OB_ISNULL(dict_main_)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_ISNULL(cjksg = OB_NEWx(ObIKCJKProcessor, &allocator_, *dict_main_, document_memory_))) {
+  } else if (OB_ISNULL(cjksg = OB_NEWx(ObIKCJKProcessor,
+                                        &allocator_,
+                                        *dict_main_,
+                                        document_memory_,
+                                        ObCollationType::CS_TYPE_UTF8MB4_BIN == coll_type_
+                                            && IKCandidateAutomaton::get_instance().is_ready()
+                                            ? &IKCandidateAutomaton::get_instance() : nullptr))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else if (OB_ISNULL(surrogate_seg = OB_NEWx(ObIKSurrogateProcessor, &allocator_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;

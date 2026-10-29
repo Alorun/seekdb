@@ -685,6 +685,7 @@ STORAGE_PRIVATE_HEADERS = [
     "fts/dict/ob_ik_dic.h",
     "fts/dict/ob_ik_utf8_dic_loader.h",
     "fts/ik/ob_ik_arbitrator.h",
+    "fts/ik/ob_ik_candidate_automaton.h",
     "fts/ik/ob_ik_char_util.h",
     "fts/ik/ob_ik_cjk_processor.h",
     "fts/ik/ob_ik_letter_processor.h",

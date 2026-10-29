@@ -1,0 +1,56 @@
+DROP DATABASE IF EXISTS fts_ik_candidate;
+CREATE DATABASE fts_ik_candidate;
+USE fts_ik_candidate;
+SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_overlap;
+smart_overlap
+{"tokens": [{"人民大会堂": 1}, {"中华人民共和国": 1}], "doc_len": 2}
+SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_overlap;
+max_word_overlap
+{"tokens": [{"大会": 1}, {"人民大会堂": 1}, {"大会堂": 1}, {"共和国": 1}, {"人民大会": 1}, {"人民共和国": 1}, {"中华人民": 1}, {"共和": 1}, {"会堂": 1}, {"中华": 1}, {"中华人民共和国": 1}, {"国人": 1}, {"华人": 1}, {"人民": 2}], "doc_len": 15}
+SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_ambiguous;
+smart_ambiguous
+{"tokens": [{"天安门": 1}, {"研究": 1}, {"起源": 1}, {"北京": 1}, {"生命科学": 1}, {"生命": 1}], "doc_len": 6}
+SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_ambiguous;
+max_word_ambiguous
+{"tokens": [{"天安门": 1}, {"研究生": 1}, {"门": 1}, {"研究": 1}, {"起源": 1}, {"北京": 1}, {"生命科学": 1}, {"天安": 1}, {"生命": 2}, {"科学": 1}], "doc_len": 11}
+CREATE TABLE docs_smart (
+  id INT PRIMARY KEY,
+  body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER ik
+);
+INSERT INTO docs_smart VALUES
+  (1, '中华人民共和国人民大会堂'),
+  (2, '人民大会堂'),
+  (3, '研究生命起源生命科学'),
+  (4, '无关文档');
+SELECT GROUP_CONCAT(id ORDER BY id) AS smart_hits FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂');
+smart_hits
+1,2
+SELECT id, MATCH(body) AGAINST('人民大会堂') AS score FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂') ORDER BY id;
+id	score
+1	0.37162162162162166
+2	0.3956834532374101
+UPDATE docs_smart SET body='人民大会堂' WHERE id=4;
+DELETE FROM docs_smart WHERE id=2;
+INSERT INTO docs_smart VALUES (5, '人民大会堂');
+SELECT GROUP_CONCAT(id ORDER BY id) AS smart_hits_after_dml FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂');
+smart_hits_after_dml
+1,4,5
+CREATE TABLE docs_max (
+  id INT PRIMARY KEY,
+  body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word')
+);
+INSERT INTO docs_max VALUES
+  (1, '中华人民共和国人民大会堂'),
+  (2, '人民大会堂'),
+  (3, '研究生命起源生命科学'),
+  (4, '无关文档');
+SELECT GROUP_CONCAT(id ORDER BY id) AS max_hits FROM docs_max
+  WHERE MATCH(body) AGAINST('研究生命');
+max_hits
+3
+DROP DATABASE fts_ik_candidate;

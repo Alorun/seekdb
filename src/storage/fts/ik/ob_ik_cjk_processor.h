@@ -19,6 +19,7 @@
 
 #include "lib/allocator/ob_allocator.h"
 #include "storage/fts/dict/ob_ft_dict.h"
+#include "storage/fts/ik/ob_ik_candidate_automaton.h"
 #include "storage/fts/ik/ob_ik_processor.h"
 
 namespace oceanbase
@@ -29,14 +30,18 @@ class ObFTDictHub;
 class ObIKCJKProcessor : public ObIIKProcessor
 {
 public:
-  ObIKCJKProcessor(const ObIFTDict &dict_main, ObIAllocator &alloc)
-      : hits_(alloc), dict_main_(dict_main), cjk_start_(-1), cjk_end_(-1)
+  ObIKCJKProcessor(const ObIFTDict &dict_main,
+                   ObIAllocator &alloc,
+                   const IKCandidateAutomaton *automaton = nullptr)
+      : hits_(alloc), dict_main_(dict_main), automaton_(automaton), automaton_state_(0),
+        cjk_start_(-1), cjk_end_(-1)
   {
   }
   ~ObIKCJKProcessor() override { hits_.reset(); }
   void clear_document() override
   {
     hits_.reset();
+    automaton_state_ = 0;
     cjk_start_ = cjk_end_ = -1;
   }
 
@@ -49,6 +54,8 @@ public:
 private:
   ObList<ObDATrieHit, ObIAllocator> hits_;
   const ObIFTDict &dict_main_;
+  const IKCandidateAutomaton *automaton_;
+  uint32_t automaton_state_;
   int64_t cjk_start_;
   int64_t cjk_end_;
 
