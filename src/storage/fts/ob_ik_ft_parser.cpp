@@ -73,8 +73,8 @@ void ObIKFTParser::clear_document()
   if (nullptr != ctx_) {
     ctx_->clear_document();
   }
-  for (ObIIKProcessor *processor : segmenters_) {
-    processor->clear_document();
+  for (int64_t i = 0; i < segmenter_count_; ++i) {
+    segmenters_[i]->clear_document();
   }
   // A single unusually large document must not enlarge the retained working set.
   if (&document_memory_ == &document_allocator_) {
@@ -170,11 +170,11 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
 {
   int ret = OB_SUCCESS;
   // Reuse the character metadata computed once by TokenizeContext.
-  for (ObList<ObIIKProcessor *, ObIAllocator>::iterator iter = segmenters_.begin();
-       OB_SUCC(ret) && iter != segmenters_.end();
-       iter++) {
-    if (OB_FAIL((*iter)->do_process(ctx, ch, char_len, type))) {
-    }
+  if (OB_FAIL(segmenters_[0]->do_process(ctx, ch, char_len, type))) {
+  } else if (OB_FAIL(segmenters_[1]->do_process(ctx, ch, char_len, type))) {
+  } else if (OB_FAIL(segmenters_[2]->do_process(ctx, ch, char_len, type))) {
+  } else if (segmenter_count_ > 3
+             && OB_FAIL(segmenters_[3]->do_process(ctx, ch, char_len, type))) {
   }
   return ret;
 }
@@ -194,8 +194,7 @@ int ObIKFTParser::process_next_batch()
       const char *ch;
       uint8_t char_len = 0;
       ObFTCharUtil::CharType type = ObFTCharUtil::CharType::USELESS;
-      if (OB_FAIL(ctx_->current_char(ch, char_len))) {
-      } else if (OB_FAIL(ctx_->current_char_type(type))) {
+      if (OB_FAIL(ctx_->current_char(ch, char_len, type))) {
       } else if (OB_FAIL(process_one_char(*ctx_, ch, char_len, type))) {
       } else {
         // 1. check segmention
@@ -351,6 +350,8 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
   ObIKQuantifierProcessor *cnqsg = nullptr;
   ObIKCJKProcessor *cjksg = nullptr;
   ObIKSurrogateProcessor *surrogate_seg = nullptr;
+  const ObCharsetType charset_type = ObCharset::charset_type_by_coll(coll_type_);
+  const bool need_surrogate_processor = CHARSET_UTF16 == charset_type || CHARSET_UTF16LE == charset_type;
   // Both collations decode the dictionary's exact UTF8 code points identically.
   const bool use_candidate_automaton =
       (ObCollationType::CS_TYPE_UTF8MB4_BIN == coll_type_
@@ -371,18 +372,28 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
                                         use_candidate_automaton
                                             ? &IKCandidateAutomaton::get_instance() : nullptr))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_ISNULL(surrogate_seg = OB_NEWx(ObIKSurrogateProcessor, &allocator_))) {
+  } else if (need_surrogate_processor
+             && OB_ISNULL(surrogate_seg = OB_NEWx(ObIKSurrogateProcessor, &allocator_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_FAIL(segmenters_.push_back(letter_seg))) {
-  } else if (FALSE_IT(letter_seg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(cnqsg))) {
-  } else if (FALSE_IT(cnqsg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(cjksg))) {
-  } else if (FALSE_IT(cjksg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(surrogate_seg))) {
-  } else if (OB_FALSE_IT(surrogate_seg = nullptr)) {
   }
-  // push back by order, quantifier is before cjk
+
+  // Preserve processor order; UTF-8 never produces UTF-16 surrogate classes.
+  if (OB_SUCC(ret)) {
+    segmenters_[segmenter_count_++] = letter_seg;
+    letter_seg = nullptr;
+  }
+  if (OB_SUCC(ret)) {
+    segmenters_[segmenter_count_++] = cnqsg;
+    cnqsg = nullptr;
+  }
+  if (OB_SUCC(ret)) {
+    segmenters_[segmenter_count_++] = cjksg;
+    cjksg = nullptr;
+  }
+  if (OB_SUCC(ret) && need_surrogate_processor) {
+    segmenters_[segmenter_count_++] = surrogate_seg;
+    surrogate_seg = nullptr;
+  }
 
   if (OB_FAIL(ret)) {
     OB_DELETEx(ObIKLetterProcessor, &allocator_, letter_seg);
@@ -401,13 +412,14 @@ void ObIKFTParser::reset()
     ctx_ = nullptr;
   }
 
-  for (ObIIKProcessor *segmenter : segmenters_) {
-    if (!OB_ISNULL(segmenter)) {
-      segmenter->~ObIIKProcessor();
-      allocator_.free(segmenter);
+  for (int64_t i = 0; i < segmenter_count_; ++i) {
+    if (!OB_ISNULL(segmenters_[i])) {
+      segmenters_[i]->~ObIIKProcessor();
+      allocator_.free(segmenters_[i]);
+      segmenters_[i] = nullptr;
     }
   }
-  segmenters_.clear();
+  segmenter_count_ = 0;
 
   cache_main_.reset();
   cache_quan_.reset();

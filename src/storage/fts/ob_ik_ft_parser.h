@@ -42,7 +42,8 @@ public:
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
         hub_(hub),
-        segmenters_(allocator_),
+        segmenters_{nullptr, nullptr, nullptr, nullptr},
+        segmenter_count_(0),
         cache_main_(allocator),
         cache_quan_(allocator),
         cache_stop_(allocator),
@@ -94,6 +95,7 @@ private:
 
 private:
   static constexpr int SEGMENT_LIMIT = 1000;
+  static constexpr int64_t MAX_SEGMENTER_COUNT = 4;
   ObIAllocator &allocator_;
   // Processor objects and dictionary handles outlive this per-document arena.
   common::ObArenaAllocator document_allocator_;
@@ -103,7 +105,8 @@ private:
   ObCollationType coll_type_;
   TokenizeContext *ctx_;
   ObFTDictHub *hub_;
-  ObList<ObIIKProcessor *, ObIAllocator> segmenters_;
+  ObIIKProcessor *segmenters_[MAX_SEGMENTER_COUNT];
+  int64_t segmenter_count_;
 
   // For now there's no change of dict in one query, so we can pin dict this level.
   ObFTCacheRangeContainer cache_main_;

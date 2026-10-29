@@ -11,6 +11,8 @@ namespace oceanbase
 namespace storage
 {
 
+class ObIKCJKProcessor;
+
 class IKCandidateAutomaton final
 {
 public:
@@ -25,6 +27,8 @@ public:
   uint32_t char_count(const uint32_t state) const;
 
 private:
+  friend class ObIKCJKProcessor;
+
   enum BuildStatus : int32_t
   {
     UNBUILT = 0,
@@ -53,7 +57,13 @@ private:
 
   IKCandidateAutomaton();
   int build_(const ObIKDictLoader::RawDict &dict, const int64_t memory_budget);
+  int advance_ready_(uint32_t &state, const char *ch, const uint8_t char_len) const;
+  uint32_t first_output_state_ready_(const uint32_t state) const;
+  uint32_t next_output_state_ready_(const uint32_t state) const;
+  uint32_t byte_length_ready_(const uint32_t state) const;
+  uint32_t char_count_ready_(const uint32_t state) const;
   static uint32_t pack_symbol_(const char *ch, const uint8_t char_len);
+  // Callers validate states and provide initialized automaton storage.
   static bool find_transition_(const State *states,
                               const Edge *edges,
                               const uint32_t state,

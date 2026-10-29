@@ -55,7 +55,8 @@ public:
   static int classify_first_utf8mb4_char(const char *input,
                                          const int64_t input_len,
                                          int64_t &char_len,
-                                         CharType &type);
+                                         CharType &type,
+                                         ob_wc_t *unicode_out = nullptr);
 
   static int check_cn_number(ObCollationType coll_type,
                              const char *input,
@@ -451,13 +452,25 @@ inline int ObFTCharUtil::is_ignore_single_cjk(ObCollationType coll_type,
 inline ObFTCharUtil::CharType ObFTCharUtil::classify_utf8mb4_unicode_(const ob_wc_t unicode)
 {
   CharType type = CharType::USELESS;
-  if (ObUnicodeBlockUtils::is_alpha(unicode)) {
+  if ((unicode >= 0x41 && unicode <= 0x5A)
+      || (unicode >= 0x61 && unicode <= 0x7A)
+      || (unicode >= 0xFF21 && unicode <= 0xFF3A)
+      || (unicode >= 0xFF41 && unicode <= 0xFF5A)) {
     type = CharType::ENGLISH_LETTER;
-  } else if (ObUnicodeBlockUtils::is_arabic(unicode)) {
+  } else if ((unicode >= 0x30 && unicode <= 0x39)
+             || (unicode >= 0xFF10 && unicode <= 0xFF19)) {
     type = CharType::ARABIC_LETTER;
-  } else if (ObUnicodeBlockUtils::is_chinese(unicode)) {
+  } else if ((unicode >= 0x4E00 && unicode <= 0x9FFF)
+             || (unicode >= 0xF900 && unicode <= 0xFAFF)
+             || (unicode >= 0x3400 && unicode <= 0x4DBF)) {
     type = CharType::CHINESE;
-  } else if (ObUnicodeBlockUtils::is_other_cjk(unicode)) {
+  } else if ((unicode >= 0xFF00 && unicode <= 0xFFEF)
+             || (unicode >= 0xAC00 && unicode <= 0xD7AF)
+             || (unicode >= 0x1100 && unicode <= 0x11FF)
+             || (unicode >= 0x3130 && unicode <= 0x318F)
+             || (unicode >= 0x3040 && unicode <= 0x309F)
+             || (unicode >= 0x30A0 && unicode <= 0x30FF)
+             || (unicode >= 0x31F0 && unicode <= 0x31FF)) {
     type = CharType::OTHER_CJK;
   }
   return type;
@@ -504,24 +517,44 @@ inline int ObFTCharUtil::do_classify(const char *input, const uint8_t char_len, 
 inline int ObFTCharUtil::classify_first_utf8mb4_char(const char *input,
                                                       const int64_t input_len,
                                                       int64_t &char_len,
-                                                      CharType &type)
+                                                      CharType &type,
+                                                      ob_wc_t *unicode_out)
 {
   int ret = OB_SUCCESS;
   char_len = 0;
   type = CharType::USELESS;
+  if (nullptr != unicode_out) {
+    *unicode_out = 0;
+  }
   if (OB_ISNULL(input) || input_len <= 0) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     const unsigned char *start = reinterpret_cast<const unsigned char *>(input);
-    ob_wc_t unicode = 0;
-    const int decoded_len = common::ob_charset_decode_unicode<CHARSET_UTF8MB4>(
-        start, start + input_len, unicode);
-    if (decoded_len <= 0) {
-      ret = OB_INVALID_ARGUMENT;
-      STORAGE_FTS_LOG(WARN, "invalid encoding found", K(decoded_len), K(input_len));
+    if (start[0] < 0x80) {
+      const unsigned char ch = start[0];
+      char_len = 1;
+      if (nullptr != unicode_out) {
+        *unicode_out = ch;
+      }
+      if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+        type = CharType::ENGLISH_LETTER;
+      } else if (ch >= '0' && ch <= '9') {
+        type = CharType::ARABIC_LETTER;
+      }
     } else {
-      char_len = decoded_len;
-      type = ObFTCharUtil::classify_utf8mb4_unicode_(unicode);
+      ob_wc_t unicode = 0;
+      const int decoded_len = common::ob_charset_decode_unicode<CHARSET_UTF8MB4>(
+          start, start + input_len, unicode);
+      if (decoded_len <= 0) {
+        ret = OB_INVALID_ARGUMENT;
+        STORAGE_FTS_LOG(WARN, "invalid encoding found", K(decoded_len), K(input_len));
+      } else {
+        char_len = decoded_len;
+        if (nullptr != unicode_out) {
+          *unicode_out = unicode;
+        }
+        type = ObFTCharUtil::classify_utf8mb4_unicode_(unicode);
+      }
     }
   }
   return ret;

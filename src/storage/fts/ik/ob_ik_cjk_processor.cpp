@@ -39,20 +39,20 @@ int ObIKCJKProcessor::do_process(TokenizeContext &ctx,
   if (nullptr != automaton_) {
     if (ObFTCharUtil::CharType::USELESS == type) {
       automaton_state_ = 0;
-    } else if (OB_FAIL(automaton_->advance(automaton_state_, ch, char_len))) {
+    } else if (OB_FAIL(automaton_->advance_ready_(automaton_state_, ch, char_len))) {
       automaton_state_ = 0;
     } else {
       const int64_t end_pos = ctx.get_cursor() + char_len;
-      for (uint32_t output_state = automaton_->first_output_state(automaton_state_);
+      for (uint32_t output_state = automaton_->first_output_state_ready_(automaton_state_);
            OB_SUCC(ret) && output_state != 0;
-           output_state = automaton_->next_output_state(output_state)) {
-        const uint32_t byte_len = automaton_->byte_length(output_state);
+           output_state = automaton_->next_output_state_ready_(output_state)) {
+        const uint32_t byte_len = automaton_->byte_length_ready_(output_state);
         if (byte_len > end_pos) {
           ret = OB_ERR_UNEXPECTED;
         } else if (OB_FAIL(ctx.add_token(ctx.fulltext(),
                                         end_pos - byte_len,
                                         byte_len,
-                                        automaton_->char_count(output_state),
+                                        automaton_->char_count_ready_(output_state),
                                         ObIKTokenType::IK_CHINESE_TOKEN))) {
         }
       }

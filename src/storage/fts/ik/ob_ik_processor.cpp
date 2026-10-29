@@ -39,8 +39,7 @@ int ObIIKProcessor::process(TokenizeContext &ctx)
   const char *ch = nullptr;
   uint8_t char_len = 0;
 
-  if (OB_FAIL(ctx.current_char_type(type))) {
-  } else if (OB_FAIL(ctx.current_char(ch, char_len))) {
+  if (OB_FAIL(ctx.current_char(ch, char_len, type))) {
   } else if (OB_FAIL(do_process(ctx, ch, char_len, type))) {
   }
   return ret;
@@ -51,7 +50,10 @@ TokenizeContext::TokenizeContext(ObCollationType coll_type,
                                  const char *fulltext,
                                  int64_t fulltext_len,
                                  bool is_smart)
-    : coll_type_(coll_type), fulltext_(fulltext), fulltext_len_(fulltext_len), cursor_(0),
+    : coll_type_(coll_type),
+      is_utf8mb4_(CHARSET_UTF8MB4 == ObCharset::charset_type_by_coll(coll_type)),
+      next_unicode_(0),
+      fulltext_(fulltext), fulltext_len_(fulltext_len), cursor_(0),
       next_char_len_(0), handle_size_(0), is_smart_(is_smart), token_list_(allocator),
       result_list_(allocator)
 {
@@ -76,6 +78,7 @@ void TokenizeContext::clear_document()
   cursor_ = 0;
   next_char_len_ = 0;
   next_char_type_ = ObFTCharUtil::CharType::USELESS;
+  next_unicode_ = 0;
 }
 
 int TokenizeContext::reuse(const char *fulltext, int64_t fulltext_len, bool is_smart)
@@ -95,37 +98,15 @@ int TokenizeContext::reset_resource()
   return OB_SUCCESS;
 }
 
-int TokenizeContext::current_char(const char *&ch, uint8_t &char_len)
-{
-  int ret = OB_SUCCESS;
-  if (cursor_ >= fulltext_len_) {
-    ret = OB_ITER_END;
-  } else {
-    ch = fulltext_ + cursor_;
-    char_len = next_char_len_;
-  }
-  return ret;
-}
-
-int TokenizeContext::current_char_type(ObFTCharUtil::CharType &type)
-{
-  int ret = OB_SUCCESS;
-  if (cursor_ >= fulltext_len_) {
-    ret = OB_ITER_END;
-  } else {
-    type = next_char_type_;
-  }
-  return ret;
-}
-
 int TokenizeContext::prepare_next_char()
 {
   int ret = OB_SUCCESS;
-  if (ObCharset::charset_type_by_coll(coll_type_) == CHARSET_UTF8MB4) {
+  if (is_utf8mb4_) {
     ret = ObFTCharUtil::classify_first_utf8mb4_char(fulltext_ + cursor_,
                                                     fulltext_len_ - cursor_,
                                                     next_char_len_,
-                                                    next_char_type_);
+                                                    next_char_type_,
+                                                    &next_unicode_);
   } else if (OB_FAIL(ObCharset::first_valid_char(coll_type_,
                                                  fulltext_ + cursor_,
                                                  fulltext_len_ - cursor_,
@@ -159,22 +140,6 @@ int TokenizeContext::step_next()
   }
   return ret;
 }
-
-ObCollationType TokenizeContext::collation() const { return coll_type_; }
-
-int64_t TokenizeContext::get_end_cursor() const { return cursor_ + next_char_len_; }
-
-const char *TokenizeContext::fulltext() const { return fulltext_; }
-
-int64_t TokenizeContext::fulltext_len() const { return fulltext_len_; }
-
-int64_t TokenizeContext::get_cursor() const { return cursor_; }
-
-bool TokenizeContext::is_last() const { return cursor_ + next_char_len_ >= fulltext_len_; }
-
-bool TokenizeContext::iter_end() const { return cursor_ >= fulltext_len_; }
-
-bool TokenizeContext::is_smart() const { return is_smart_; }
 
 int TokenizeContext::add_token(const char *fulltext,
                                int64_t offset,

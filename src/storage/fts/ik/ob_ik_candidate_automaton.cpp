@@ -23,7 +23,6 @@
 #include "lib/oblog/ob_log_module.h"
 #include "lib/utility/ob_macro_utils.h"
 
-#include <algorithm>
 #include <thread>
 
 using namespace oceanbase::common;
@@ -225,15 +224,50 @@ int IKCandidateAutomaton::build_(
   }
 
   if (OB_SUCC(ret)) {
-    std::sort(edges, edges + next_edge, [](const Edge &lhs, const Edge &rhs) {
-      return lhs.parent_ != rhs.parent_ ? lhs.parent_ < rhs.parent_ : lhs.symbol_ < rhs.symbol_;
-    });
     for (uint32_t i = 0; OB_SUCC(ret) && i < next_edge; ++i) {
       const uint32_t parent = edges[i].parent_;
-      if (0 == states[parent].edge_count_) {
-        states[parent].edge_begin_ = i;
+      if (parent >= next_state) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        ++states[parent].edge_count_;
       }
-      ++states[parent].edge_count_;
+    }
+    uint32_t edge_offset = 0;
+    for (uint32_t i = 0; OB_SUCC(ret) && i < next_state; ++i) {
+      State &state = states[i];
+      state.edge_begin_ = edge_offset;
+      queue[i] = edge_offset;
+      if (edge_offset > next_edge || state.edge_count_ > next_edge - edge_offset) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+        edge_offset += state.edge_count_;
+      }
+    }
+    if (OB_SUCC(ret) && edge_offset != next_edge) {
+      ret = OB_ERR_UNEXPECTED;
+    }
+    Edge *ordered_edges = nullptr;
+    if (OB_SUCC(ret)
+        && OB_ISNULL(ordered_edges = static_cast<Edge *>(allocator_.alloc(next_edge * sizeof(Edge))))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    }
+    for (uint32_t i = 0; OB_SUCC(ret) && i < next_edge; ++i) {
+      const Edge &edge = edges[i];
+      const State &parent = states[edge.parent_];
+      const uint32_t slot = queue[edge.parent_]++;
+      if (slot >= parent.edge_begin_ + parent.edge_count_) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (slot > parent.edge_begin_
+                 && ordered_edges[slot - 1].symbol_ >= edge.symbol_) {
+        // The source dictionary must be sorted for stable parent bucketing to
+        // preserve each node's transition order.
+        ret = OB_NOT_SUPPORTED;
+      } else {
+        ordered_edges[slot] = edge;
+      }
+    }
+    if (OB_SUCC(ret)) {
+      edges = ordered_edges;
     }
   }
 
@@ -274,16 +308,12 @@ int IKCandidateAutomaton::build_(
 
   if (OB_SUCC(ret)) {
     State *final_states = static_cast<State *>(allocator_.alloc(next_state * sizeof(State)));
-    Edge *final_edges = static_cast<Edge *>(allocator_.alloc(next_edge * sizeof(Edge)));
-    if (OB_ISNULL(final_states) || (next_edge > 0 && OB_ISNULL(final_edges))) {
+    if (OB_ISNULL(final_states)) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else {
       MEMCPY(final_states, states, next_state * sizeof(State));
-      if (next_edge > 0) {
-        MEMCPY(final_edges, edges, next_edge * sizeof(Edge));
-      }
       states_ = final_states;
-      edges_ = final_edges;
+      edges_ = edges;
       state_count_ = next_state;
       edge_count_ = next_edge;
     }
@@ -320,20 +350,28 @@ bool IKCandidateAutomaton::find_transition_(const State *states,
                                            uint32_t &target)
 {
   bool found = false;
-  if (nullptr != states && nullptr != edges && state < UINT32_MAX) {
-    uint32_t begin = states[state].edge_begin_;
-    uint32_t end = begin + states[state].edge_count_;
-    while (begin < end) {
-      const uint32_t mid = begin + (end - begin) / 2;
-      if (edges[mid].symbol_ < symbol) {
-        begin = mid + 1;
-      } else {
-        end = mid;
+  uint32_t begin = states[state].edge_begin_;
+  const uint32_t edge_end = begin + states[state].edge_count_;
+  if (states[state].edge_count_ <= 4) {
+    for (uint32_t i = begin; !found && i < edge_end; ++i) {
+      if (edges[i].symbol_ == symbol) {
+        target = edges[i].target_;
+        found = true;
       }
     }
-    if (begin < states[state].edge_begin_ + states[state].edge_count_
-        && edges[begin].symbol_ == symbol) {
-      target = edges[begin].target_;
+  } else {
+    uint32_t left = begin;
+    uint32_t right = edge_end;
+    while (left < right) {
+      const uint32_t mid = left + (right - left) / 2;
+      if (edges[mid].symbol_ < symbol) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
+    }
+    if (left < edge_end && edges[left].symbol_ == symbol) {
+      target = edges[left].target_;
       found = true;
     }
   }
@@ -343,8 +381,20 @@ bool IKCandidateAutomaton::find_transition_(const State *states,
 int IKCandidateAutomaton::advance(uint32_t &state, const char *ch, const uint8_t char_len) const
 {
   int ret = OB_SUCCESS;
-  if (!is_ready() || OB_ISNULL(ch) || char_len <= 0 || char_len > 4
-      || state >= state_count_) {
+  if (!is_ready()) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    ret = advance_ready_(state, ch, char_len);
+  }
+  return ret;
+}
+
+int IKCandidateAutomaton::advance_ready_(uint32_t &state,
+                                         const char *ch,
+                                         const uint8_t char_len) const
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(ch) || char_len <= 0 || char_len > 4 || state >= state_count_) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     const uint32_t symbol = pack_symbol_(ch, char_len);
@@ -361,26 +411,42 @@ int IKCandidateAutomaton::advance(uint32_t &state, const char *ch, const uint8_t
 
 uint32_t IKCandidateAutomaton::first_output_state(const uint32_t state) const
 {
-  uint32_t result = 0;
-  if (is_ready() && state < state_count_) {
-    result = states_[state].is_terminal_ ? state : states_[state].output_state_;
-  }
-  return result;
+  return is_ready() ? first_output_state_ready_(state) : 0;
 }
 
 uint32_t IKCandidateAutomaton::next_output_state(const uint32_t state) const
 {
-  return is_ready() && state < state_count_ ? states_[state].output_state_ : 0;
+  return is_ready() ? next_output_state_ready_(state) : 0;
 }
 
 uint32_t IKCandidateAutomaton::byte_length(const uint32_t state) const
 {
-  return is_ready() && state < state_count_ ? states_[state].byte_length_ : 0;
+  return is_ready() ? byte_length_ready_(state) : 0;
 }
 
 uint32_t IKCandidateAutomaton::char_count(const uint32_t state) const
 {
-  return is_ready() && state < state_count_ ? states_[state].char_count_ : 0;
+  return is_ready() ? char_count_ready_(state) : 0;
+}
+
+uint32_t IKCandidateAutomaton::first_output_state_ready_(const uint32_t state) const
+{
+  return state < state_count_ ? (states_[state].is_terminal_ ? state : states_[state].output_state_) : 0;
+}
+
+uint32_t IKCandidateAutomaton::next_output_state_ready_(const uint32_t state) const
+{
+  return state < state_count_ ? states_[state].output_state_ : 0;
+}
+
+uint32_t IKCandidateAutomaton::byte_length_ready_(const uint32_t state) const
+{
+  return state < state_count_ ? states_[state].byte_length_ : 0;
+}
+
+uint32_t IKCandidateAutomaton::char_count_ready_(const uint32_t state) const
+{
+  return state < state_count_ ? states_[state].char_count_ : 0;
 }
 
 } // namespace storage

@@ -37,9 +37,14 @@ int ObIKLetterProcessor::do_process(TokenizeContext &ctx,
                                     const ObFTCharUtil::CharType type)
 {
   int ret = OB_SUCCESS;
-  if (OB_FAIL(process_english_letter(ctx, ch, char_len, type))) {
-  } else if (OB_FAIL(process_arabic_letter(ctx, ch, char_len, type))) {
-  } else if (OB_FAIL(process_mix_letter(ctx, ch, char_len, type))) {
+  if ((english_start_ != -1 || ObFTCharUtil::CharType::ENGLISH_LETTER == type)
+      && OB_FAIL(process_english_letter(ctx, ch, char_len, type))) {
+  } else if ((arabic_start_ != -1 || ObFTCharUtil::CharType::ARABIC_LETTER == type)
+             && OB_FAIL(process_arabic_letter(ctx, ch, char_len, type))) {
+  } else if ((mix_start_ != -1
+              || ObFTCharUtil::CharType::ENGLISH_LETTER == type
+              || ObFTCharUtil::CharType::ARABIC_LETTER == type)
+             && OB_FAIL(process_mix_letter(ctx, ch, char_len, type))) {
   }
   return ret;
 }
