@@ -734,6 +734,7 @@ protected:
   bool report_checksum_;
   bool in_rescan_;
   ObDomainIndexCache domain_index_;
+  common::ObArenaAllocator fts_lob_allocator_;
   ObFTIndexRowCache fts_index_;
 
   // output_ is used to output data, TSC operator directly invokes output_::get_next_row(s),

@@ -109,6 +109,7 @@ ObDASTextRetrievalMergeIter::ObDASTextRetrievalMergeIter()
     whole_doc_cnt_iter_(nullptr),
     whole_doc_agg_param_(),
     limit_param_(),
+    limit_after_lookup_(false),
     input_row_cnt_(0),
     output_row_cnt_(0),
     force_return_docid_(false),
@@ -136,8 +137,19 @@ int ObDASTextRetrievalMergeIter::rescan()
   } else {
     next_written_idx_ = 0;
     limit_param_ = ir_rtdef_->get_inv_idx_scan_rtdef()->limit_param_;
+    if (limit_after_lookup_) {
+      limit_param_.offset_ = 0;
+      limit_param_.limit_ = -1;
+    }
   }
   return ret;
+}
+
+void ObDASTextRetrievalMergeIter::set_limit_after_lookup()
+{
+  limit_after_lookup_ = true;
+  limit_param_.offset_ = 0;
+  limit_param_.limit_ = -1;
 }
 
 int ObDASTextRetrievalMergeIter::set_related_tablet_ids(
@@ -346,6 +358,10 @@ int ObDASTextRetrievalMergeIter::inner_init(ObDASIterParam &param)
       } else if (OB_FAIL(cache_doc_ids_.prepare_allocate(size))) {
       } else {
         limit_param_ = ir_rtdef_->get_inv_idx_scan_rtdef()->limit_param_;
+        if (limit_after_lookup_) {
+          limit_param_.offset_ = 0;
+          limit_param_.limit_ = -1;
+        }
       }
       if (OB_FAIL(ret)) {
       } else if (force_return_docid_) {
@@ -446,6 +462,7 @@ int ObDASTextRetrievalMergeIter::inner_release()
   output_row_cnt_ = 0;
   limit_param_.offset_ = 0;
   limit_param_.limit_ = -1;
+  limit_after_lookup_ = false;
   force_return_docid_ = false;
   doc_cnt_calculated_ = false;
   doc_cnt_iter_acquired_ = false;
@@ -1918,6 +1935,8 @@ int ObDASTRDaatIter::fill_loser_tree_item(
     ObExpr *relevance_expr = ir_ctdef_->relevance_expr_;
     const ObDatum &relevance_datum = relevance_expr->locate_expr_datum(*ir_rtdef_->eval_ctx_);
     item.relevance_ = relevance_datum.get_double();
+  } else {
+    item.relevance_ = 0.0;
   }
   return ret;
 }
@@ -1945,7 +1964,7 @@ int ObDASTRDaatIter::next_disjunctive_document(const bool is_batch, bool &doc_va
       next_batch_iter_idxes_[next_batch_cnt_++] = top_item->iter_idx_;
       if (BOOLEAN == relation_type_) {
         boolean_relevances_[top_item->iter_idx_] = top_item->relevance_;
-      } else {
+      } else if (ir_ctdef_->need_calc_relevance()) {
         // consider to add an expr for collectiong conjunction result between query tokens here?
         cur_doc_relevance += top_item->relevance_;
       }
@@ -2196,7 +2215,7 @@ int ObDASTRDaatLookupIter::next_disjunctive_document(const int capacity)
           next_batch_iter_idxes_[next_batch_cnt_++] = top_item->iter_idx_;
           if (BOOLEAN == relation_type_) {
             boolean_relevances_[top_item->iter_idx_] = top_item->relevance_;
-          } else {
+          } else if (ir_ctdef_->need_calc_relevance()) {
             // consider to add an expr for collectiong conjunction result between query tokens here?
             cur_doc_relevance += top_item->relevance_;
           }

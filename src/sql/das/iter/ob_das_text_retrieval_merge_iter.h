@@ -118,6 +118,7 @@ public:
 
   virtual int do_table_scan() override;
   virtual int rescan() override;
+  void set_limit_after_lookup();
   void set_domain_id_idx_tablet_id(const ObTabletID &tablet_id) { domain_id_idx_tablet_id_ = tablet_id; }
   storage::ObTableScanParam &get_doc_agg_param() { return whole_doc_agg_param_; }
   int set_related_tablet_ids(const ObDASFTSTabletID &related_tablet_ids);
@@ -180,6 +181,7 @@ protected:
   ObDASScanIter *whole_doc_cnt_iter_;
   ObTableScanParam whole_doc_agg_param_;
   common::ObLimitParam limit_param_;
+  bool limit_after_lookup_;
   int64_t input_row_cnt_;
   int64_t output_row_cnt_;
   ObDocIdExt default_docid_; // for function lookup

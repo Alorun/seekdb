@@ -678,6 +678,7 @@ ObTableScanOp::ObTableScanOp(ObExecContext &exec_ctx, const ObOpSpec &spec, ObOp
     report_checksum_(false),
     in_rescan_(false),
     domain_index_(),
+    fts_lob_allocator_(lib::ObMemAttr("FtsLobBuffer"), OB_MALLOC_NORMAL_BLOCK_SIZE),
     fts_index_(),
     output_   (nullptr),
     fold_iter_(nullptr),
@@ -3666,9 +3667,9 @@ int ObTableScanOp::fetch_next_fts_index_rows()
       ret = OB_ERR_UNEXPECTED;
     } else {
       ObString ft = ft_datum->get_string();
-      ObArenaAllocator tmp_allocator(ObModIds::OB_LOB_ACCESS_BUFFER, OB_MALLOC_NORMAL_BLOCK_SIZE);
+      fts_lob_allocator_.reuse();
       if (OB_FAIL(ObTextStringHelper::read_real_string_data(get_exec_ctx(),
-                                                            tmp_allocator,
+                                                            fts_lob_allocator_,
                                                             *ft_datum,
                                                             ft_expr->datum_meta_,
                                                             ft_expr->obj_meta_.has_lob_header(),

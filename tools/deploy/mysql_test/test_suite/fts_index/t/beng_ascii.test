@@ -10,6 +10,7 @@ SELECT tokenize('Delta alpha delta beta ALPHA!', 'beng', '[{"output": "all"}]') 
 SELECT tokenize('A..B 123 45x _foo_ foo-bar', 'beng', '[{"output": "all"}]') AS ascii_boundaries;
 SELECT tokenize(CONCAT('one', CHAR(9), 'two', CHAR(10), 'three'), 'beng', '[{"output": "all"}]') AS controls;
 SELECT tokenize(_utf8mb4'Alpha beta alpha' COLLATE utf8mb4_bin, 'beng', '[{"output": "all"}]') AS bin_collation;
+SELECT tokenize(_utf8mb4'THE' COLLATE utf8mb4_bin, 'beng', '[{"output": "all"}]') AS bin_stopword;
 SELECT tokenize(BINARY 'Alpha beta alpha', 'beng', '[{"output": "all"}]') AS fallback_collation;
 SELECT tokenize('数据库', 'beng', '[{"output": "all"}]') AS non_ascii;
 
