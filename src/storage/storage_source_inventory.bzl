@@ -520,6 +520,7 @@ STORAGE_UNITY_GROUPS = [
         language = "c++",
         srcs = [
             "src/storage/fts/ik/ob_ik_processor.cpp",
+            "src/storage/fts/ik/ob_ik_candidate_automaton.cpp",
             "src/storage/fts/ik/ob_ik_letter_processor.cpp",
             "src/storage/fts/ik/ob_ik_cjk_processor.cpp",
             "src/storage/fts/ik/ob_ik_quantifier_processor.cpp",

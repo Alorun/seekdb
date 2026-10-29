@@ -1,0 +1,45 @@
+--disable_warnings
+DROP DATABASE IF EXISTS fts_ik_candidate;
+--enable_warnings
+CREATE DATABASE fts_ik_candidate;
+USE fts_ik_candidate;
+
+SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_overlap;
+SELECT tokenize('中华人民共和国人民大会堂', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_overlap;
+SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]') AS smart_ambiguous;
+SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_ambiguous;
+
+CREATE TABLE docs_smart (
+  id INT PRIMARY KEY,
+  body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER ik
+);
+INSERT INTO docs_smart VALUES
+  (1, '中华人民共和国人民大会堂'),
+  (2, '人民大会堂'),
+  (3, '研究生命起源生命科学'),
+  (4, '无关文档');
+SELECT GROUP_CONCAT(id ORDER BY id) AS smart_hits FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂');
+SELECT id, MATCH(body) AGAINST('人民大会堂') AS score FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂') ORDER BY id;
+UPDATE docs_smart SET body='人民大会堂' WHERE id=4;
+DELETE FROM docs_smart WHERE id=2;
+INSERT INTO docs_smart VALUES (5, '人民大会堂');
+SELECT GROUP_CONCAT(id ORDER BY id) AS smart_hits_after_dml FROM docs_smart
+  WHERE MATCH(body) AGAINST('人民大会堂');
+
+CREATE TABLE docs_max (
+  id INT PRIMARY KEY,
+  body TEXT,
+  FULLTEXT INDEX ft(body) WITH PARSER ik PARSER_PROPERTIES=(ik_mode='max_word')
+);
+INSERT INTO docs_max VALUES
+  (1, '中华人民共和国人民大会堂'),
+  (2, '人民大会堂'),
+  (3, '研究生命起源生命科学'),
+  (4, '无关文档');
+SELECT GROUP_CONCAT(id ORDER BY id) AS max_hits FROM docs_max
+  WHERE MATCH(body) AGAINST('研究生命');
+
+DROP DATABASE fts_ik_candidate;

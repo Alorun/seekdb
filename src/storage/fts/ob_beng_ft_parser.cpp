@@ -26,6 +26,56 @@ namespace oceanbase
 namespace storage
 {
 
+namespace
+{
+bool is_ascii_delimiter(const ObCharsetInfo *cs, const char ch)
+{
+  return ob_isspace(cs, ch) || ob_iscntrl(cs, ch) || ob_ispunct(cs, ch);
+}
+}
+
+int ObBEngFTParser::get_next_ascii_token(
+    const char *&word, int64_t &word_len, int64_t &char_len, int64_t &word_freq)
+{
+  int ret = OB_ITER_END;
+  const char *text = doc_.ptr_;
+  const int64_t len = doc_.len_;
+  const ObCharsetInfo *cs = analysis_ctx_.cs_;
+  while (ascii_pos_ < len && OB_ITER_END == ret) {
+    while (ascii_pos_ < len && is_ascii_delimiter(cs, text[ascii_pos_])) {
+      ++ascii_pos_;
+    }
+    const int64_t begin = ascii_pos_;
+    while (ascii_pos_ < len && !is_ascii_delimiter(cs, text[ascii_pos_])) {
+      ++ascii_pos_;
+    }
+    int64_t first = begin;
+    int64_t last = ascii_pos_ - 1;
+    while (first <= last && !ob_isalnum(cs, text[first])) {
+      ++first;
+    }
+    while (last >= first && !ob_isalnum(cs, text[last])) {
+      --last;
+    }
+    if (first <= last) {
+      if (nullptr == ascii_buf_
+          && OB_ISNULL(ascii_buf_ = static_cast<char *>(token_allocator_->alloc(len)))) {
+        ret = OB_ALLOCATE_MEMORY_FAILED;
+      } else {
+        for (int64_t i = first; i <= last; ++i) {
+          ascii_buf_[i] = ob_tolower(cs, text[i]);
+        }
+        word = ascii_buf_ + first;
+        word_len = last - first + 1;
+        char_len = word_len;
+        word_freq = 1;
+        ret = OB_SUCCESS;
+      }
+    }
+  }
+  return ret;
+}
+
 int ObBEngFTParser::get_next_token(
     const char *&word,
     int64_t &word_len,
@@ -42,6 +92,8 @@ int ObBEngFTParser::get_next_token(
   word_freq = 0;
   if (OB_UNLIKELY(!is_inited_)) {
     ret = OB_NOT_INIT;
+  } else if (ascii_mode_) {
+    ret = get_next_ascii_token(word, word_len, char_len, word_freq);
   } else if (OB_ISNULL(token_stream_)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(token_stream_->get_next(token, token_freq))) {
@@ -81,7 +133,7 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     token_allocator_ = param->allocator_;
     if (OB_FAIL(english_analyzer_.init(analysis_ctx_, allocator_))) {
     } else if (OB_FAIL(segment(doc_, token_stream_))) {
-    } else if (OB_ISNULL(token_stream_)) {
+    } else if (!ascii_mode_ && OB_ISNULL(token_stream_)) {
       ret = OB_ERR_UNEXPECTED;
     } else {
       is_inited_ = true;
@@ -100,6 +152,9 @@ void ObBEngFTParser::clear_document()
   }
   doc_.reset();
   token_allocator_ = nullptr;
+  ascii_buf_ = nullptr;
+  ascii_pos_ = 0;
+  ascii_mode_ = false;
 }
 
 int ObBEngFTParser::reuse(ObFTParserParam *param)
@@ -129,7 +184,20 @@ int ObBEngFTParser::segment(
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_UNLIKELY(UINT32_MAX < doc.len_)) {
     ret = OB_NOT_SUPPORTED;
-  } else if (OB_FAIL(english_analyzer_.analyze(doc, token_stream))) {
+  } else {
+    const ObCharsetInfo *cs = analysis_ctx_.cs_;
+    ascii_mode_ = (cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_BIN)
+                   || cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_GENERAL_CI));
+    for (int64_t i = 0; ascii_mode_ && i < doc.len_; ++i) {
+      // Invalid NUL input remains on the original multibyte tokenizer path.
+      ascii_mode_ = 0 != doc.ptr_[i] && 0 == (static_cast<unsigned char>(doc.ptr_[i]) & 0x80);
+    }
+    ascii_pos_ = 0;
+    ascii_buf_ = nullptr;
+    if (!ascii_mode_ && OB_FAIL(english_analyzer_.analyze(doc, token_stream))) {
+    } else if (ascii_mode_) {
+      token_stream = nullptr;
+    }
   }
   return ret;
 }
@@ -141,6 +209,9 @@ void ObBEngFTParser::reset()
   doc_.reset();
   token_allocator_ = nullptr;
   token_stream_ = nullptr;
+  ascii_buf_ = nullptr;
+  ascii_pos_ = 0;
+  ascii_mode_ = false;
   is_inited_ = false;
 }
 
