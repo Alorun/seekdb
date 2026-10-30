@@ -39,25 +39,43 @@ int ObIKCJKProcessor::do_process(TokenizeContext &ctx,
   if (nullptr != automaton_) {
     if (ObFTCharUtil::CharType::USELESS == type) {
       automaton_state_ = 0;
-    } else if (OB_FAIL(automaton_->advance(automaton_state_, ch, char_len))) {
-      automaton_state_ = 0;
     } else {
-      const int64_t end_pos = ctx.get_cursor() + char_len;
-      for (uint32_t output_state = automaton_->first_output_state(automaton_state_);
-           OB_SUCC(ret) && output_state != 0;
-           output_state = automaton_->next_output_state(output_state)) {
-        const uint32_t byte_len = automaton_->byte_length(output_state);
-        if (byte_len > end_pos) {
-          ret = OB_ERR_UNEXPECTED;
-        } else if (OB_FAIL(ctx.add_token(ctx.fulltext(),
-                                        end_pos - byte_len,
-                                        byte_len,
-                                        automaton_->char_count(output_state),
-                                        ObIKTokenType::IK_CHINESE_TOKEN))) {
-        }
-      }
-      if (OB_FAIL(ret)) {
+      const uint32_t input_state = automaton_state_;
+      const uint32_t symbol = IKCandidateAutomaton::pack_symbol(ch, char_len);
+      const uint32_t cache_idx = (input_state * 2654435761U ^ symbol)
+                                 & (TRANSITION_CACHE_SIZE - 1);
+      TransitionCacheEntry &cache = transition_cache_[cache_idx];
+      bool advanced = false;
+      if (cache.valid_ && cache.state_ == input_state && cache.symbol_ == symbol) {
+        automaton_state_ = cache.target_;
+        advanced = true;
+      } else if (OB_FAIL(automaton_->advance(automaton_state_, ch, char_len))) {
         automaton_state_ = 0;
+      } else {
+        cache.state_ = input_state;
+        cache.symbol_ = symbol;
+        cache.target_ = automaton_state_;
+        cache.valid_ = true;
+        advanced = true;
+      }
+      if (advanced) {
+        const int64_t end_pos = ctx.get_cursor() + char_len;
+        for (uint32_t output_state = automaton_->first_output_state(automaton_state_);
+             OB_SUCC(ret) && output_state != 0;
+             output_state = automaton_->next_output_state(output_state)) {
+          const uint32_t byte_len = automaton_->byte_length(output_state);
+          if (byte_len > end_pos) {
+            ret = OB_ERR_UNEXPECTED;
+          } else if (OB_FAIL(ctx.add_token(ctx.fulltext(),
+                                          end_pos - byte_len,
+                                          byte_len,
+                                          automaton_->char_count(output_state),
+                                          ObIKTokenType::IK_CHINESE_TOKEN))) {
+          }
+        }
+        if (OB_FAIL(ret)) {
+          automaton_state_ = 0;
+        }
       }
     }
     if (ctx.is_last()) {

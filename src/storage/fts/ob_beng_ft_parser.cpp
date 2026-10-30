@@ -38,51 +38,18 @@ int ObBEngFTParser::get_next_ascii_token(
     const char *&word, int64_t &word_len, int64_t &char_len, int64_t &word_freq)
 {
   int ret = OB_ITER_END;
-  const char *text = doc_.ptr_;
-  const int64_t len = doc_.len_;
-  const ObCharsetInfo *cs = analysis_ctx_.cs_;
-  while (ascii_pos_ < len && OB_ITER_END == ret) {
-    while (ascii_pos_ < len && is_ascii_delimiter(cs, text[ascii_pos_])) {
-      ++ascii_pos_;
+  if (ascii_token_idx_ < ascii_buffer_pos_) {
+    const uint32_t begin = ascii_token_idx_;
+    uint32_t end = begin;
+    while (end < ascii_buffer_pos_ && 0 != ascii_buf_[end]) {
+      ++end;
     }
-    if (ascii_pos_ >= len) {
-      break;
-    }
-    const int64_t segment_begin = ascii_buffer_pos_;
-    int64_t first_alnum = -1;
-    int64_t last_alnum = -1;
-    int scan_ret = OB_SUCCESS;
-    while (ascii_pos_ < len && !is_ascii_delimiter(cs, text[ascii_pos_])) {
-      const char c = text[ascii_pos_++];
-      if (nullptr == ascii_buf_
-          && OB_ISNULL(ascii_buf_ = static_cast<char *>(token_allocator_->alloc(len)))) {
-        scan_ret = OB_ALLOCATE_MEMORY_FAILED;
-      } else {
-        ascii_buf_[ascii_buffer_pos_] = ob_tolower(cs, c);
-        if (ob_isalnum(cs, c)) {
-          if (first_alnum < 0) {
-            first_alnum = ascii_buffer_pos_;
-          }
-          last_alnum = ascii_buffer_pos_;
-        }
-        ++ascii_buffer_pos_;
-      }
-      if (OB_FAIL(scan_ret)) {
-        break;
-      }
-    }
-    if (ascii_pos_ < len) {
-      ++ascii_pos_;
-    }
-    if (OB_FAIL(scan_ret)) {
-      ret = scan_ret;
-    } else if (first_alnum >= segment_begin) {
-      word = ascii_buf_ + first_alnum;
-      word_len = last_alnum - first_alnum + 1;
-      char_len = word_len;
-      word_freq = 1;
-      ret = OB_SUCCESS;
-    }
+    word = ascii_buf_ + begin;
+    word_len = end - begin;
+    char_len = word_len;
+    word_freq = 1;
+    ascii_token_idx_ = end >= ascii_buffer_pos_ ? ascii_buffer_pos_ : end + 1;
+    ret = OB_SUCCESS;
   }
   return ret;
 }
@@ -164,7 +131,7 @@ void ObBEngFTParser::clear_document()
   doc_.reset();
   token_allocator_ = nullptr;
   ascii_buf_ = nullptr;
-  ascii_pos_ = 0;
+  ascii_token_idx_ = 0;
   ascii_buffer_pos_ = 0;
   ascii_mode_ = false;
 }
@@ -200,15 +167,73 @@ int ObBEngFTParser::segment(
     const ObCharsetInfo *cs = analysis_ctx_.cs_;
     ascii_mode_ = (cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_BIN)
                    || cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_GENERAL_CI));
-    for (int64_t i = 0; ascii_mode_ && i < doc.len_; ++i) {
-      // Invalid NUL input remains on the original multibyte tokenizer path.
-      ascii_mode_ = 0 != doc.ptr_[i] && 0 == (static_cast<unsigned char>(doc.ptr_[i]) & 0x80);
+    if (ascii_mode_ && ascii_table_cs_ != cs) {
+      static const uint8_t DELIMITER = 1;
+      static const uint8_t ALNUM = 2;
+      for (int64_t i = 0; i < 128; ++i) {
+        const char c = static_cast<char>(i);
+        ascii_class_[i] = 0;
+        if (is_ascii_delimiter(cs, c)) {
+          ascii_class_[i] |= DELIMITER;
+        }
+        if (ob_isalnum(cs, c)) {
+          ascii_class_[i] |= ALNUM;
+        }
+        ascii_lower_[i] = ob_tolower(cs, c);
+      }
+      ascii_table_cs_ = cs;
     }
-    ascii_pos_ = 0;
+    ascii_token_idx_ = 0;
     ascii_buffer_pos_ = 0;
     ascii_buf_ = nullptr;
-    if (!ascii_mode_ && OB_FAIL(english_analyzer_.analyze(doc, token_stream))) {
-    } else if (ascii_mode_) {
+    if (ascii_mode_) {
+      static const uint8_t DELIMITER = 1;
+      static const uint8_t ALNUM = 2;
+      uint32_t token_count = 0;
+      int64_t token_start = -1;
+      int64_t last_alnum = -1;
+      for (int64_t i = 0; OB_SUCC(ret) && ascii_mode_ && i < doc.len_; ++i) {
+        const uint8_t c = static_cast<uint8_t>(doc.ptr_[i]);
+        if (0 == c || 0 != (c & 0x80)) {
+          ascii_mode_ = false;
+        } else if ((ascii_class_[c] & DELIMITER) != 0) {
+          if (token_start >= 0) {
+            ascii_buffer_pos_ = last_alnum + 1;
+            ++token_count;
+            token_start = -1;
+            last_alnum = -1;
+          }
+        } else {
+          if (token_start < 0 && (ascii_class_[c] & ALNUM) != 0) {
+            if (nullptr == ascii_buf_
+                && OB_ISNULL(ascii_buf_ = static_cast<char *>(token_allocator_->alloc(doc.len_)))) {
+              ret = OB_ALLOCATE_MEMORY_FAILED;
+            } else if (OB_SUCC(ret)) {
+              if (token_count > 0) {
+                ascii_buf_[ascii_buffer_pos_++] = '\0';
+              }
+              token_start = ascii_buffer_pos_;
+            }
+          }
+          if (OB_SUCC(ret) && token_start >= 0) {
+            ascii_buf_[ascii_buffer_pos_] = ascii_lower_[c];
+            if ((ascii_class_[c] & ALNUM) != 0) {
+              last_alnum = ascii_buffer_pos_;
+            }
+            ++ascii_buffer_pos_;
+          }
+        }
+      }
+      if (OB_SUCC(ret) && ascii_mode_ && token_start >= 0) {
+        ascii_buffer_pos_ = last_alnum + 1;
+      }
+      if (!ascii_mode_) {
+        ascii_token_idx_ = 0;
+        ascii_buffer_pos_ = 0;
+      }
+    }
+    if (OB_SUCC(ret) && !ascii_mode_ && OB_FAIL(english_analyzer_.analyze(doc, token_stream))) {
+    } else if (OB_SUCC(ret) && ascii_mode_) {
       token_stream = nullptr;
     }
   }
@@ -223,9 +248,12 @@ void ObBEngFTParser::reset()
   token_allocator_ = nullptr;
   token_stream_ = nullptr;
   ascii_buf_ = nullptr;
-  ascii_pos_ = 0;
+  ascii_token_idx_ = 0;
   ascii_buffer_pos_ = 0;
   ascii_mode_ = false;
+  ascii_table_cs_ = nullptr;
+  MEMSET(ascii_class_, 0, sizeof(ascii_class_));
+  MEMSET(ascii_lower_, 0, sizeof(ascii_lower_));
   is_inited_ = false;
 }
 

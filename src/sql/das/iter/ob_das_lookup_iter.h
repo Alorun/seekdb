@@ -99,6 +99,7 @@ protected:
   virtual int add_rowkeys(int64_t count) = 0;
   virtual int do_index_lookup() = 0;
   virtual int check_index_lookup() = 0;
+  int64_t get_effective_batch_row_count() const;
 
 protected:
   enum LookupState : uint32_t

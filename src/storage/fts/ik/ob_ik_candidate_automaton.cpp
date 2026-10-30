@@ -209,7 +209,7 @@ int IKCandidateAutomaton::build_(
           const uint32_t parent = path[path_count - 1];
           const uint32_t child = next_state++;
           states[child] = State{};
-          edges[next_edge++] = Edge{parent, pack_symbol_(word.ptr() + offset, char_len), child};
+          edges[next_edge++] = Edge{parent, pack_symbol(word.ptr() + offset, char_len), child};
           path[path_count++] = child;
           offset += char_len;
         }
@@ -293,7 +293,7 @@ int IKCandidateAutomaton::build_(
   return ret;
 }
 
-uint32_t IKCandidateAutomaton::pack_symbol_(const char *ch, const uint8_t char_len)
+uint32_t IKCandidateAutomaton::pack_symbol(const char *ch, const uint8_t char_len)
 {
   const uint32_t b0 = static_cast<unsigned char>(ch[0]);
   uint32_t symbol = b0;
@@ -347,7 +347,7 @@ int IKCandidateAutomaton::advance(uint32_t &state, const char *ch, const uint8_t
       || state >= state_count_) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    const uint32_t symbol = pack_symbol_(ch, char_len);
+    const uint32_t symbol = pack_symbol(ch, char_len);
     uint32_t target = 0;
     bool found = find_transition_(states_, edges_, state, symbol, target);
     while (!found && 0 != state) {

@@ -24,6 +24,21 @@ using namespace common;
 namespace sql
 {
 
+int64_t ObDASLookupIter::get_effective_batch_row_count() const
+{
+  int64_t row_count = default_batch_row_count_;
+  if (nullptr != lookup_ctdef_
+      && lookup_ctdef_->table_param_.is_fts_index()
+      && nullptr != lookup_rtdef_
+      && lookup_rtdef_->limit_param_.limit_ > 0) {
+    const int64_t offset = MAX(lookup_rtdef_->limit_param_.offset_, 0);
+    const int64_t limit = lookup_rtdef_->limit_param_.limit_;
+    const int64_t target = offset > INT64_MAX - limit ? INT64_MAX : offset + limit;
+    row_count = MIN(row_count, MAX(target, 1));
+  }
+  return row_count;
+}
+
 int ObDASLookupIter::inner_init(ObDASIterParam &param)
 {
   int ret = OB_SUCCESS;
@@ -97,7 +112,9 @@ int ObDASLookupIter::inner_get_next_row()
   bool got_next_row = false;
   int64_t simulate_batch_row_cnt = - EVENT_CALL(EventTable::EN_TABLE_LOOKUP_BATCH_ROW_COUNT);
   const bool use_simulate_batch_row_cnt = simulate_batch_row_cnt > 0 && simulate_batch_row_cnt < default_batch_row_count_;
-  int64_t default_row_batch_cnt  = use_simulate_batch_row_cnt ? simulate_batch_row_cnt : default_batch_row_count_;
+  int64_t default_row_batch_cnt = use_simulate_batch_row_cnt
+      ? MIN(simulate_batch_row_cnt, get_effective_batch_row_count())
+      : get_effective_batch_row_count();
   do {
     switch (state_) {
       case INDEX_SCAN: {
@@ -172,7 +189,9 @@ int ObDASLookupIter::inner_get_next_rows(int64_t &count, int64_t capacity)
   bool get_next_rows = false;
   int64_t simulate_batch_row_cnt = - EVENT_CALL(EventTable::EN_TABLE_LOOKUP_BATCH_ROW_COUNT);
   const bool use_simulate_batch_row_cnt = simulate_batch_row_cnt > 0 && simulate_batch_row_cnt < default_batch_row_count_;
-  int64_t default_row_batch_cnt  = use_simulate_batch_row_cnt ? simulate_batch_row_cnt : default_batch_row_count_;
+  int64_t default_row_batch_cnt = use_simulate_batch_row_cnt
+      ? MIN(simulate_batch_row_cnt, get_effective_batch_row_count())
+      : get_effective_batch_row_count();
   do {
     switch (state_) {
       case INDEX_SCAN: {

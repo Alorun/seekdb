@@ -19,6 +19,7 @@ public:
   int build_if_needed(const ObIKDictLoader::RawDict &dict, const int64_t memory_budget);
   bool is_ready() const { return READY == status_.load(std::memory_order_acquire); }
   int advance(uint32_t &state, const char *ch, const uint8_t char_len) const;
+  static uint32_t pack_symbol(const char *ch, const uint8_t char_len);
   uint32_t first_output_state(const uint32_t state) const;
   uint32_t next_output_state(const uint32_t state) const;
   uint32_t byte_length(const uint32_t state) const;
@@ -53,7 +54,6 @@ private:
 
   IKCandidateAutomaton();
   int build_(const ObIKDictLoader::RawDict &dict, const int64_t memory_budget);
-  static uint32_t pack_symbol_(const char *ch, const uint8_t char_len);
   static bool find_transition_(const State *states,
                               const Edge *edges,
                               const uint32_t state,

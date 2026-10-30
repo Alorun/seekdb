@@ -18,6 +18,7 @@
 #define _OCEANBASE_STORAGE_FTS_IK_OB_IK_CJK_PROCESSOR_H_
 
 #include "lib/allocator/ob_allocator.h"
+#include "lib/utility/ob_macro_utils.h"
 #include "storage/fts/dict/ob_ft_dict.h"
 #include "storage/fts/ik/ob_ik_candidate_automaton.h"
 #include "storage/fts/ik/ob_ik_processor.h"
@@ -30,12 +31,22 @@ class ObFTDictHub;
 class ObIKCJKProcessor : public ObIIKProcessor
 {
 public:
+  static const int64_t TRANSITION_CACHE_SIZE = 64;
+  struct TransitionCacheEntry
+  {
+    uint32_t state_;
+    uint32_t symbol_;
+    uint32_t target_;
+    bool valid_;
+  };
+
   ObIKCJKProcessor(const ObIFTDict &dict_main,
                    ObIAllocator &alloc,
                    const IKCandidateAutomaton *automaton = nullptr)
       : hits_(alloc), dict_main_(dict_main), automaton_(automaton), automaton_state_(0),
         cjk_start_(-1), cjk_end_(-1)
   {
+    MEMSET(transition_cache_, 0, sizeof(transition_cache_));
   }
   ~ObIKCJKProcessor() override { hits_.reset(); }
   void clear_document() override
@@ -56,6 +67,7 @@ private:
   const ObIFTDict &dict_main_;
   const IKCandidateAutomaton *automaton_;
   uint32_t automaton_state_;
+  TransitionCacheEntry transition_cache_[TRANSITION_CACHE_SIZE];
   int64_t cjk_start_;
   int64_t cjk_end_;
 
