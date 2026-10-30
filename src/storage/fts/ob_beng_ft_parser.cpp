@@ -18,6 +18,7 @@
 
 #include "storage/fts/ob_beng_ft_parser.h"
 #include "data_plane/fts/ob_fts_struct.h"
+#include "data_plane/encoding/ob_ascii_util.h"
 
 using namespace oceanbase::common;
 
@@ -184,11 +185,9 @@ int ObBEngFTParser::segment(
   } else {
     const ObCharsetInfo *cs = analysis_ctx_.cs_;
     ascii_mode_ = (cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_BIN)
-                   || cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_GENERAL_CI));
-    for (int64_t i = 0; ascii_mode_ && i < doc.len_; ++i) {
-      // Invalid NUL input remains on the original multibyte tokenizer path.
-      ascii_mode_ = 0 != doc.ptr_[i] && 0 == (static_cast<unsigned char>(doc.ptr_[i]) & 0x80);
-    }
+                   || cs == ObCharset::get_charset(CS_TYPE_UTF8MB4_GENERAL_CI))
+                   && is_ascii_str(doc.ptr_, doc.len_)
+                   && nullptr == doc.get_string().find('\0');
     ascii_pos_ = 0;
     ascii_buf_ = nullptr;
     if (!ascii_mode_ && !analyzer_inited_) {
