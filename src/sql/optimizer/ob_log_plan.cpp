@@ -12255,7 +12255,12 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     // relation-expression deduplication can hide a shared SELECT/WHERE root.
     const ObSelectStmt *select_stmt = get_stmt()->is_select_stmt()
                                        ? static_cast<const ObSelectStmt *>(get_stmt()) : nullptr;
-    if (nullptr != select_stmt
+    if (nullptr != select_stmt && select_stmt->is_scala_group_by()
+        && select_stmt->get_aggr_item_size() == 1
+        && nullptr != select_stmt->get_aggr_items().at(0)
+        && select_stmt->get_aggr_items().at(0)->get_expr_type() == T_FUN_COUNT
+        && select_stmt->get_aggr_items().at(0)->get_real_param_exprs().empty()
+        && select_stmt->get_condition_exprs().count() == 1
         && select_stmt->get_table_size() == 1
         && select_stmt->get_table_item(0)->is_basic_table()
         && select_stmt->get_subquery_expr_size() == 0

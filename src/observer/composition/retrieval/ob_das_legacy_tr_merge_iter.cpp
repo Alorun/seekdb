@@ -474,7 +474,6 @@ int ObDASLegacyTRMergeIter::init_daat_iter_param(ObTextDaaTParam &iter_param)
   iter_param.allocator_ = &myself_allocator_;
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
-  iter_param.minimum_should_match_ = ir_rtdef_->minimum_should_match_;
   if (ir_ctdef_->need_calc_relevance()) {
     const ObDASScanCtDef *doc_agg_ctdef = ir_ctdef_->get_doc_agg_ctdef();
     if (OB_ISNULL(doc_agg_ctdef) || doc_agg_ctdef->pd_expr_spec_.pd_storage_aggregate_output_.empty()) {
