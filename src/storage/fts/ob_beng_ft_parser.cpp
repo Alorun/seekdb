@@ -30,8 +30,10 @@ namespace
 {
 bool is_ascii_alnum(const char ch)
 {
-  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-      || (ch >= '0' && ch <= '9');
+  const unsigned char c = static_cast<unsigned char>(ch);
+  const unsigned char digit_offset = static_cast<unsigned char>(c - '0');
+  const unsigned char alpha_offset = static_cast<unsigned char>((c | 0x20) - 'a');
+  return digit_offset <= 9 || alpha_offset <= 25;
 }
 }
 
@@ -46,19 +48,23 @@ int ObBEngFTParser::get_next_ascii_token(
       ++ascii_pos_;
     }
     const int64_t begin = ascii_pos_;
+    bool needs_lowercase = false;
     while (ascii_pos_ < len && is_ascii_alnum(text[ascii_pos_])) {
+      const unsigned char ch = static_cast<unsigned char>(text[ascii_pos_]);
+      needs_lowercase |= ch >= 'A' && ch <= 'Z';
       ++ascii_pos_;
     }
     if (begin < ascii_pos_) {
-      if (nullptr == ascii_buf_
+      if (needs_lowercase && nullptr == ascii_buf_
           && OB_ISNULL(ascii_buf_ = static_cast<char *>(token_allocator_->alloc(len)))) {
         ret = OB_ALLOCATE_MEMORY_FAILED;
       } else {
-        for (int64_t i = begin; i < ascii_pos_; ++i) {
-          const char ch = text[i];
-          ascii_buf_[i] = (ch >= 'A' && ch <= 'Z') ? ch + ('a' - 'A') : ch;
+        if (needs_lowercase) {
+          for (int64_t i = begin; i < ascii_pos_; ++i) {
+            ascii_buf_[i] = static_cast<char>(text[i] | 0x20);
+          }
         }
-        word = ascii_buf_ + begin;
+        word = needs_lowercase ? ascii_buf_ + begin : text + begin;
         word_len = ascii_pos_ - begin;
         char_len = word_len;
         word_freq = 1;

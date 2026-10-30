@@ -4,6 +4,9 @@ USE fts_beng_ascii;
 SELECT tokenize('HELLO hello HELLO', 'beng', '[{"output": "all"}]') AS repeated;
 repeated
 {"tokens": [{"hello": 3}], "doc_len": 3}
+SELECT tokenize('hello HELLO', 'beng', '[{"output": "all"}]') AS lowercase_source_key;
+lowercase_source_key
+{"tokens": [{"hello": 2}], "doc_len": 2}
 SELECT tokenize('---HeLLo---', 'beng', '[{"output": "all"}]') AS punctuation;
 punctuation
 {"tokens": [{"hello": 1}], "doc_len": 1}

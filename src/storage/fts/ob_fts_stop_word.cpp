@@ -248,7 +248,7 @@ int ObAddWord::process_word(
   } else if (OB_FAIL(check_stopword(dst_word, is_stopword, is_ascii_lowercase))) {
   } else if (OB_UNLIKELY(is_stopword)) {
     ++stopword_cnt_;
-  } else if (OB_FAIL(groupby_word(dst_word, word_freq))) {
+  } else if (OB_FAIL(groupby_word(dst_word, word_freq, is_ascii_lowercase))) {
   } else {
     non_stopword_cnt_ += word_freq;
   }
@@ -307,7 +307,9 @@ int ObAddWord::check_stopword(const ObFTWord &ft_word,
   return ret;
 }
 
-int ObAddWord::groupby_word(const ObFTWord &word, const int64_t word_freq)
+int ObAddWord::groupby_word(const ObFTWord &word,
+                            const int64_t word_freq,
+                            const bool is_ascii_lowercase)
 {
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(word.empty() || word_freq <= 0)) {
@@ -316,11 +318,13 @@ int ObAddWord::groupby_word(const ObFTWord &word, const int64_t word_freq)
     if (OB_FAIL(word_map_.set_refactored(word, 1/*word count*/))) {
     }
   } else {
-    // set_refactored(overwrite) also replaces the key, including the spelling
-    // of collation-equivalent words. Preserve that behavior without replacing
-    // the node or finding its bucket a second time.
-    auto add_frequency = [&word, word_freq](common::hash::HashMapPair<ObFTWord, int64_t> &entry) {
-      entry.first = word;
+    // ASCII fast-path words already have their canonical lowercase spelling.
+    // Other collations retain the prior key replacement behavior.
+    auto add_frequency = [&word, word_freq, is_ascii_lowercase](
+        common::hash::HashMapPair<ObFTWord, int64_t> &entry) {
+      if (!is_ascii_lowercase) {
+        entry.first = word;
+      }
       entry.second += word_freq;
     };
     ret = word_map_.set_or_update(word, 1/*initial word count*/, add_frequency);

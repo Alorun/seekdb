@@ -5,6 +5,7 @@ CREATE DATABASE fts_beng_ascii;
 USE fts_beng_ascii;
 
 SELECT tokenize('HELLO hello HELLO', 'beng', '[{"output": "all"}]') AS repeated;
+SELECT tokenize('hello HELLO', 'beng', '[{"output": "all"}]') AS lowercase_source_key;
 SELECT tokenize('---HeLLo---', 'beng', '[{"output": "all"}]') AS punctuation;
 SELECT tokenize('Delta alpha delta beta ALPHA!', 'beng', '[{"output": "all"}]') AS order_and_case;
 SELECT tokenize('A..B 123 45x _foo_ foo-bar', 'beng', '[{"output": "all"}]') AS ascii_boundaries;
