@@ -43,6 +43,38 @@ ObObjDatumMapType ObFTIndexRowCache::FTS_DOC_WORD_TYPES[] = {OBJ_DATUM_STRING, O
 ObExprOperatorType ObFTIndexRowCache::FTS_INDEX_EXPR_TYPE[] = {T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
 ObExprOperatorType ObFTIndexRowCache::FTS_DOC_WORD_EXPR_TYPE[] = {T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
 
+static int get_reusable_ft_row(
+    common::ObIAllocator &datum_allocator,
+    common::ObIAllocator &row_allocator,
+    ObDomainIndexRow &row_pool,
+    const int64_t row_idx,
+    blocksstable::ObDatumRow *&row)
+{
+  int ret = OB_SUCCESS;
+  row = nullptr;
+  if (row_idx < 0) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (row_idx < row_pool.count()) {
+    row = row_pool.at(row_idx);
+    row->reuse();
+  } else {
+    void *buf = nullptr;
+    if (OB_ISNULL(buf = row_allocator.alloc(sizeof(blocksstable::ObDatumRow)))) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else {
+      row = new (buf) blocksstable::ObDatumRow();
+      if (OB_FAIL(row->init(datum_allocator, 4))) {
+        row->~ObDatumRow();
+        row = nullptr;
+      } else if (OB_FAIL(row_pool.push_back(row))) {
+        row->~ObDatumRow();
+        row = nullptr;
+      }
+    }
+  }
+  return ret;
+}
+
 ObFTIndexRowCache::ObFTIndexRowCache()
   : rows_(),
     row_idx_(0),
@@ -278,16 +310,19 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
                                                              const ObDatum &doc_id_datum,
                                                              const ObString &fulltext,
                                                              const bool is_fts_index_aux,
-                                                             ObDomainIndexRow &word_rows)
+                                                             ObDomainIndexRow &word_rows,
+                                                             ObDomainIndexRow *row_pool,
+                                                             common::ObIAllocator *row_allocator)
 {
   int ret = OB_SUCCESS;
   static int64_t FT_WORD_DOC_COL_CNT = 4;
   static constexpr int64_t FT_MAX_WORD_BUCKET = 997;
-  const int64_t ft_word_bkt_cnt = MIN(MAX(fulltext.length() / 10, 2), FT_MAX_WORD_BUCKET);
+  const int64_t ft_word_bkt_cnt = MIN(MAX(fulltext.length() / 4, 2), FT_MAX_WORD_BUCKET);
   int64_t doc_length = 0;
   ObFTWordMap *ft_word_map = nullptr;
   void *rows_buf = nullptr;
   blocksstable::ObDatumRow *rows = nullptr;
+  const bool reuse_rows = nullptr != row_pool && nullptr != row_allocator;
   if (OB_ISNULL(helper) || OB_UNLIKELY(!ft_obj_meta.is_valid())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(helper->segment(ft_obj_meta, fulltext.ptr(), fulltext.length(),
@@ -296,17 +331,26 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
   } else if (0 == ft_word_map->size()) {
     ret = OB_ITER_END;
   } else if (OB_FAIL(word_rows.reserve(word_rows.count() + ft_word_map->size()))) {
-  } else if (OB_ISNULL(rows_buf = reinterpret_cast<char *>(
-                           allocator.alloc(ft_word_map->size() * sizeof(blocksstable::ObDatumRow))))) {
+  } else if (!reuse_rows && OB_ISNULL(rows_buf = reinterpret_cast<char *>(
+                                          allocator.alloc(ft_word_map->size() * sizeof(blocksstable::ObDatumRow))))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
     int64_t i = 0;
-    rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map->size()];
+    if (!reuse_rows) {
+      rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map->size()];
+    }
     for (ObFTWordMap::const_iterator iter = ft_word_map->begin();
          OB_SUCC(ret) && iter != ft_word_map->end();
          ++iter) {
-      if (OB_FAIL(rows[i].init(allocator, FT_WORD_DOC_COL_CNT))) {
+      blocksstable::ObDatumRow *row = nullptr;
+      if (reuse_rows) {
+        if (OB_FAIL(get_reusable_ft_row(allocator, *row_allocator, *row_pool, i, row))) {
+        }
+      } else if (OB_FAIL(rows[i].init(allocator, FT_WORD_DOC_COL_CNT))) {
       } else {
+        row = &rows[i];
+      }
+      if (OB_SUCC(ret)) {
         const ObFTWord &ft_word = iter->first;
         const int64_t word_cnt = iter->second;
         // index row format
@@ -316,11 +360,11 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
         const int64_t doc_id_idx = is_fts_index_aux ? 1 : 0;
         const int64_t word_cnt_idx = 2;
         const int64_t doc_len_idx = 3;
-        rows[i].storage_datums_[word_idx].set_datum(ft_word.get_word());
-        rows[i].storage_datums_[doc_id_idx].shallow_copy_from_datum(doc_id_datum);
-        rows[i].storage_datums_[word_cnt_idx].set_uint(word_cnt);
-        rows[i].storage_datums_[doc_len_idx].set_uint(doc_length);
-        if (OB_FAIL(word_rows.push_back(&rows[i]))) {
+        row->storage_datums_[word_idx].set_datum(ft_word.get_word());
+        row->storage_datums_[doc_id_idx].shallow_copy_from_datum(doc_id_datum);
+        row->storage_datums_[word_cnt_idx].set_uint(word_cnt);
+        row->storage_datums_[doc_len_idx].set_uint(doc_length);
+        if (OB_FAIL(word_rows.push_back(row))) {
         } else {
           ++i;
         }
@@ -836,12 +880,20 @@ void ObFTDMLIterator::reset()
 {
   is_inited_ = false;
   data_plane::reset_ft_doc_word_iterator(ft_doc_word_iter_);
+  for (int64_t i = 0; i < ft_row_pool_.count(); ++i) {
+    if (OB_NOT_NULL(ft_row_pool_.at(i))) {
+      ft_row_pool_.at(i)->~ObDatumRow();
+    }
+  }
+  ft_row_pool_.reset();
+  ft_row_allocator_.reset();
   ft_parse_helper_.reset();
   ObDomainDMLIterator::reset();
 }
 
 ObFTDMLIterator::~ObFTDMLIterator()
 {
+  reset();
   data_plane::destroy_ft_doc_word_iterator(ft_doc_word_iter_);
 }
 
@@ -1026,7 +1078,9 @@ int ObFTDMLIterator::generate_ft_word_rows(const ObChunkDatumStore::StoredRow *s
                                                                    doc_id_datum,
                                                                    ft,
                                                                    is_fts_index_aux,
-                                                                   rows_))) {
+                                                                   rows_,
+                                                                   &ft_row_pool_,
+                                                                   &ft_row_allocator_))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
   }

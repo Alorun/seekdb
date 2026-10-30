@@ -186,7 +186,9 @@ public:
                                          const ObDatum &doc_id_datum,
                                          const ObString &fulltext,
                                          const bool is_fts_index_aux,
-                                         ObDomainIndexRow &word_rows);
+                                         ObDomainIndexRow &word_rows,
+                                         ObDomainIndexRow *row_pool = nullptr,
+                                         common::ObIAllocator *row_allocator = nullptr);
   static int generate_multivalue_index_rows(
       ObIAllocator &allocator,
       const ObDASDMLBaseCtDef &das_ctdef,
@@ -359,6 +361,8 @@ public:
     doc_word_info_(ft_doc_word_info),
     ft_doc_word_iter_(nullptr),
     ft_doc_word_allocator_(allocator),
+    ft_row_allocator_(),
+    ft_row_pool_(),
     ft_parse_helper_(),
     is_inited_(false)
   {
@@ -392,6 +396,8 @@ private:
   const ObFTDocWordInfo *doc_word_info_;
   data_plane::ObFTDocWordIterator *ft_doc_word_iter_;
   common::ObArenaAllocator ft_doc_word_allocator_;
+  common::ObArenaAllocator ft_row_allocator_;
+  ObDomainDMLIterator::ObDomainIndexRow ft_row_pool_;
   storage::ObFTParseHelper ft_parse_helper_;
   bool is_inited_;
 };
