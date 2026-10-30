@@ -32,6 +32,24 @@ namespace sql
 {
 
 
+// The DML batch interface requires a contiguous array of posting rows.
+// Bound retained memory for documents with a large vocabulary.
+class FTPostingRowPool final
+{
+public:
+  static constexpr int64_t MAX_RETAINED_ROWS = 256;
+  FTPostingRowPool() : allocator_("FTPostingRows"), rows_(nullptr), capacity_(0) {}
+  ~FTPostingRowPool() { reset(); }
+  int reserve(const int64_t count);
+  void reset();
+  blocksstable::ObDatumRow *rows() { return rows_; }
+private:
+  common::ObArenaAllocator allocator_;
+  blocksstable::ObDatumRow *rows_;
+  int64_t capacity_;
+  DISALLOW_COPY_AND_ASSIGN(FTPostingRowPool);
+};
+
 class ObFTIndexRowCache final
 {
 public:
@@ -55,6 +73,7 @@ public:
 private:
   lib::MemoryContext merge_memctx_;
   ObDomainIndexRow rows_;
+  FTPostingRowPool row_pool_;
   uint64_t row_idx_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
@@ -187,8 +206,7 @@ public:
                                          const ObString &fulltext,
                                          const bool is_fts_index_aux,
                                          ObDomainIndexRow &word_rows,
-                                         ObDomainIndexRow *row_pool = nullptr,
-                                         common::ObIAllocator *row_allocator = nullptr);
+                                         FTPostingRowPool *row_pool = nullptr);
   static int generate_multivalue_index_rows(
       ObIAllocator &allocator,
       const ObDASDMLBaseCtDef &das_ctdef,
@@ -361,7 +379,6 @@ public:
     doc_word_info_(ft_doc_word_info),
     ft_doc_word_iter_(nullptr),
     ft_doc_word_allocator_(allocator),
-    ft_row_allocator_(),
     ft_row_pool_(),
     ft_parse_helper_(),
     is_inited_(false)
@@ -396,8 +413,7 @@ private:
   const ObFTDocWordInfo *doc_word_info_;
   data_plane::ObFTDocWordIterator *ft_doc_word_iter_;
   common::ObArenaAllocator ft_doc_word_allocator_;
-  common::ObArenaAllocator ft_row_allocator_;
-  ObDomainDMLIterator::ObDomainIndexRow ft_row_pool_;
+  FTPostingRowPool ft_row_pool_;
   storage::ObFTParseHelper ft_parse_helper_;
   bool is_inited_;
 };

@@ -43,6 +43,7 @@ public:
       ascii_buf_(nullptr),
       ascii_pos_(0),
       ascii_mode_(false),
+      analyzer_inited_(false),
       is_inited_(false)
   {}
   ~ObBEngFTParser() { reset(); }
@@ -75,6 +76,7 @@ private:
   char *ascii_buf_;
   int64_t ascii_pos_;
   bool ascii_mode_;
+  bool analyzer_inited_;
   bool is_inited_;
 
   DISALLOW_COPY_AND_ASSIGN(ObBEngFTParser);

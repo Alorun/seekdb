@@ -43,40 +43,49 @@ ObObjDatumMapType ObFTIndexRowCache::FTS_DOC_WORD_TYPES[] = {OBJ_DATUM_STRING, O
 ObExprOperatorType ObFTIndexRowCache::FTS_INDEX_EXPR_TYPE[] = {T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
 ObExprOperatorType ObFTIndexRowCache::FTS_DOC_WORD_EXPR_TYPE[] = {T_FUN_SYS_DOC_ID, T_FUN_SYS_WORD_SEGMENT, T_FUN_SYS_WORD_COUNT, T_FUN_SYS_DOC_LENGTH};
 
-static int get_reusable_ft_row(
-    common::ObIAllocator &datum_allocator,
-    common::ObIAllocator &row_allocator,
-    ObDomainIndexRow &row_pool,
-    const int64_t row_idx,
-    blocksstable::ObDatumRow *&row)
+int FTPostingRowPool::reserve(const int64_t count)
 {
   int ret = OB_SUCCESS;
-  row = nullptr;
-  if (row_idx < 0) {
+  if (OB_UNLIKELY(count <= 0 || count > MAX_RETAINED_ROWS)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (row_idx < row_pool.count()) {
-    row = row_pool.at(row_idx);
-    row->reuse();
-  } else {
-    void *buf = nullptr;
-    if (OB_ISNULL(buf = row_allocator.alloc(sizeof(blocksstable::ObDatumRow)))) {
+  } else if (count > capacity_) {
+    int64_t capacity = 16;
+    while (capacity < count) {
+      capacity *= 2;
+    }
+    reset();
+    void *buf = allocator_.alloc(capacity * sizeof(blocksstable::ObDatumRow));
+    if (OB_ISNULL(buf)) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else {
-      row = new (buf) blocksstable::ObDatumRow();
-      if (OB_FAIL(row->init(datum_allocator, 4))) {
-        row->~ObDatumRow();
-        row = nullptr;
-      } else if (OB_FAIL(row_pool.push_back(row))) {
-        row->~ObDatumRow();
-        row = nullptr;
+      rows_ = static_cast<blocksstable::ObDatumRow *>(buf);
+      for (int64_t i = 0; OB_SUCC(ret) && i < capacity; ++i) {
+        new (&rows_[i]) blocksstable::ObDatumRow();
+        ++capacity_;
+        if (OB_FAIL(rows_[i].init(allocator_, 4))) {
+        }
       }
+    }
+    if (OB_FAIL(ret)) {
+      reset();
     }
   }
   return ret;
 }
 
+void FTPostingRowPool::reset()
+{
+  for (int64_t i = 0; i < capacity_; ++i) {
+    rows_[i].~ObDatumRow();
+  }
+  rows_ = nullptr;
+  capacity_ = 0;
+  allocator_.reset();
+}
+
 ObFTIndexRowCache::ObFTIndexRowCache()
   : rows_(),
+    row_pool_(),
     row_idx_(0),
     is_fts_index_aux_(true),
     helper_(),
@@ -126,7 +135,7 @@ int ObFTIndexRowCache::segment(const common::ObObjMeta &ft_obj_meta,
                                                                    doc_id_datum,
                                                                    fulltext,
                                                                    is_fts_index_aux_,
-                                                                   rows_))) {
+                                                                   rows_, &row_pool_))) {
   } else {
     row_idx_ = 0;
   }
@@ -150,6 +159,7 @@ int ObFTIndexRowCache::get_next_row(blocksstable::ObDatumRow *&row)
 void ObFTIndexRowCache::reset()
 {
   rows_.reset();
+  row_pool_.reset();
   row_idx_ = 0;
   is_fts_index_aux_ = true;
   helper_.reset();
@@ -311,8 +321,7 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
                                                              const ObString &fulltext,
                                                              const bool is_fts_index_aux,
                                                              ObDomainIndexRow &word_rows,
-                                                             ObDomainIndexRow *row_pool,
-                                                             common::ObIAllocator *row_allocator)
+                                                             FTPostingRowPool *row_pool)
 {
   int ret = OB_SUCCESS;
   static int64_t FT_WORD_DOC_COL_CNT = 4;
@@ -322,7 +331,7 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
   ObFTWordMap *ft_word_map = nullptr;
   void *rows_buf = nullptr;
   blocksstable::ObDatumRow *rows = nullptr;
-  const bool reuse_rows = nullptr != row_pool && nullptr != row_allocator;
+  bool reuse_rows = false;
   if (OB_ISNULL(helper) || OB_UNLIKELY(!ft_obj_meta.is_valid())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(helper->segment(ft_obj_meta, fulltext.ptr(), fulltext.length(),
@@ -331,21 +340,36 @@ int ObDASDomainUtils::build_ft_doc_word_infos(
   } else if (0 == ft_word_map->size()) {
     ret = OB_ITER_END;
   } else if (OB_FAIL(word_rows.reserve(word_rows.count() + ft_word_map->size()))) {
-  } else if (!reuse_rows && OB_ISNULL(rows_buf = reinterpret_cast<char *>(
-                                          allocator.alloc(ft_word_map->size() * sizeof(blocksstable::ObDatumRow))))) {
-    ret = OB_ALLOCATE_MEMORY_FAILED;
   } else {
-    int64_t i = 0;
-    if (!reuse_rows) {
-      rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map->size()];
+    reuse_rows = nullptr != row_pool && ft_word_map->size() <= FTPostingRowPool::MAX_RETAINED_ROWS;
+    if (reuse_rows) {
+      if (OB_FAIL(row_pool->reserve(ft_word_map->size()))) {
+      } else {
+        rows = row_pool->rows();
+      }
+    } else {
+      if (nullptr != row_pool) {
+        row_pool->reset();
+      }
+      if (OB_ISNULL(rows_buf = allocator.alloc(
+                            ft_word_map->size() * sizeof(blocksstable::ObDatumRow)))) {
+        ret = OB_ALLOCATE_MEMORY_FAILED;
+      } else {
+        rows = new (rows_buf) blocksstable::ObDatumRow[ft_word_map->size()];
+      }
     }
+    int64_t i = 0;
     for (ObFTWordMap::const_iterator iter = ft_word_map->begin();
          OB_SUCC(ret) && iter != ft_word_map->end();
          ++iter) {
       blocksstable::ObDatumRow *row = nullptr;
       if (reuse_rows) {
-        if (OB_FAIL(get_reusable_ft_row(allocator, *row_allocator, *row_pool, i, row))) {
-        }
+        row = &rows[i];
+        // Consumers may set DML flags and transient transaction metadata.
+        row->trans_info_ = nullptr;
+        row->reuse();
+        row->row_flag_.reset();
+        row->count_ = FT_WORD_DOC_COL_CNT;
       } else if (OB_FAIL(rows[i].init(allocator, FT_WORD_DOC_COL_CNT))) {
       } else {
         row = &rows[i];
@@ -880,13 +904,7 @@ void ObFTDMLIterator::reset()
 {
   is_inited_ = false;
   data_plane::reset_ft_doc_word_iterator(ft_doc_word_iter_);
-  for (int64_t i = 0; i < ft_row_pool_.count(); ++i) {
-    if (OB_NOT_NULL(ft_row_pool_.at(i))) {
-      ft_row_pool_.at(i)->~ObDatumRow();
-    }
-  }
   ft_row_pool_.reset();
-  ft_row_allocator_.reset();
   ft_parse_helper_.reset();
   ObDomainDMLIterator::reset();
 }
@@ -1079,8 +1097,7 @@ int ObFTDMLIterator::generate_ft_word_rows(const ObChunkDatumStore::StoredRow *s
                                                                    ft,
                                                                    is_fts_index_aux,
                                                                    rows_,
-                                                                   &ft_row_pool_,
-                                                                   &ft_row_allocator_))) {
+                                                                   &ft_row_pool_))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
   }

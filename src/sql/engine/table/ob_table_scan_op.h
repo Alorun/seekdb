@@ -736,6 +736,8 @@ protected:
   ObDomainIndexCache domain_index_;
   common::ObArenaAllocator fts_lob_allocator_;
   ObFTIndexRowCache fts_index_;
+  // Generated-column expressions are stable for the lifetime of the scan plan.
+  ObExpr *fts_output_exprs_[4];
 
   // output_ is used to output data, TSC operator directly invokes output_::get_next_row(s),
   // it points to fold_iter_ in group rescan and iter_tree_ in normal scan.

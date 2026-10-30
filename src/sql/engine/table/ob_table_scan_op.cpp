@@ -680,6 +680,7 @@ ObTableScanOp::ObTableScanOp(ObExecContext &exec_ctx, const ObOpSpec &spec, ObOp
     domain_index_(),
     fts_lob_allocator_(lib::ObMemAttr("FtsLobBuffer"), OB_MALLOC_NORMAL_BLOCK_SIZE),
     fts_index_(),
+    fts_output_exprs_{nullptr, nullptr, nullptr, nullptr},
     output_   (nullptr),
     fold_iter_(nullptr),
     iter_tree_(nullptr),
@@ -3717,11 +3718,23 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
 {
   int ret = OB_SUCCESS;
   expr = nullptr;
+  int64_t cache_idx = -1;
+  if (T_FUN_SYS_WORD_SEGMENT == type) {
+    cache_idx = MY_SPEC.is_fts_index_aux_ ? 0 : 1;
+  } else if (T_FUN_SYS_DOC_ID == type) {
+    cache_idx = MY_SPEC.is_fts_index_aux_ ? 1 : 0;
+  } else if (T_FUN_SYS_WORD_COUNT == type) {
+    cache_idx = 2;
+  } else if (T_FUN_SYS_DOC_LENGTH == type) {
+    cache_idx = 3;
+  }
   if (OB_UNLIKELY(T_FUN_SYS_WORD_SEGMENT != type
                && T_FUN_SYS_DOC_ID != type
                && T_FUN_SYS_WORD_COUNT != type
                && T_FUN_SYS_DOC_LENGTH != type)) {
     ret = OB_INVALID_ARGUMENT;
+  } else if (OB_NOT_NULL(expr = fts_output_exprs_[cache_idx])) {
+    // The output expressions are fixed for this scan operator.
   } else if (T_FUN_SYS_DOC_ID == type) {
     for (int64_t i = 0; OB_SUCC(ret) && OB_ISNULL(expr) && i < MY_SPEC.output_.count(); ++i) {
       ObExpr *tmp_expr = MY_SPEC.output_.at(i);
@@ -3733,6 +3746,9 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
           ret = OB_ERR_UNEXPECTED;
         } else {
           expr = MY_SPEC.output_.at(idx);
+          const int64_t word_cache_idx = MY_SPEC.is_fts_index_aux_ ? 0 : 1;
+          fts_output_exprs_[word_cache_idx] = tmp_expr;
+          fts_output_exprs_[cache_idx] = expr;
         }
       }
     }
@@ -3743,6 +3759,7 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
         ret = OB_ERR_UNEXPECTED;
       } else if (type == tmp_expr->type_) {
         expr = tmp_expr;
+        fts_output_exprs_[cache_idx] = expr;
       }
     }
   }

@@ -15,4 +15,15 @@ SELECT tokenize(_utf8mb4'ARE COM for FROM How THAT the THiS WAS WhAT when WHERE 
 SELECT tokenize(BINARY 'Alpha beta alpha', 'beng', '[{"output": "all"}]') AS fallback_collation;
 SELECT tokenize('数据库', 'beng', '[{"output": "all"}]') AS non_ascii;
 
+CREATE TABLE beng_reuse (id INT PRIMARY KEY, text_value VARCHAR(100),
+                         FULLTEXT INDEX ft_text(text_value) WITH PARSER beng);
+INSERT INTO beng_reuse VALUES
+  (1, 'Alpha beta'),
+  (2, '数据库引擎'),
+  (3, 'Gamma delta');
+SELECT id FROM beng_reuse WHERE MATCH(text_value) AGAINST('alpha') ORDER BY id;
+SELECT id FROM beng_reuse WHERE MATCH(text_value) AGAINST('数据库引擎') ORDER BY id;
+SELECT id FROM beng_reuse WHERE MATCH(text_value) AGAINST('delta') ORDER BY id;
+DROP TABLE beng_reuse;
+
 DROP DATABASE fts_beng_ascii;
