@@ -539,7 +539,6 @@ int ObFtsIndexBuildTask::prepare_aux_index_tables()
   bool state_finished = false;
   const ObIndexType doc_rowkey_type = ObIndexType::INDEX_TYPE_DOC_ID_ROWKEY_LOCAL;
   const ObIndexType domain_index_aux_type = create_index_arg_.index_type_;
-  const ObIndexType fts_doc_word_type = ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL;
   ObDDLTaskStatus next_status;
   const ObString &parser_name = create_index_arg_.index_option_.parser_name_;
   bool need_to_load_dic = false;
@@ -605,34 +604,28 @@ int ObFtsIndexBuildTask::prepare_aux_index_tables()
         }
       }
 #endif
-     DEBUG_SYNC(BEFOR_PREPARE_CREATE_TFS_INDEX_WORD_DOC);
-     if (OB_FAIL(ret)) {
-     } else if (OB_FAIL(prepare_aux_table(domain_index_aux_type,
-                    domain_index_aux_task_submitted_,
-                    domain_index_aux_table_id_,
-                    domain_index_aux_task_id_))) {
-     } else if (!is_fts_task()) {
-       fts_doc_word_task_submitted_ = true;
-     } else {
-#ifdef ERRSIM
-      if (OB_SUCC(ret)) {
-        ret = OB_E(EventTable::EN_FTS_INDEX_BUILD_DOC_WORD_FAILED) OB_SUCCESS;
-        if (OB_FAIL(ret)) {
-        }
-      }
-#endif
-      DEBUG_SYNC(BEFOR_PREPARE_CREATE_TFS_INDEX_DOC_WORD);
+      DEBUG_SYNC(BEFOR_PREPARE_CREATE_TFS_INDEX_WORD_DOC);
       if (OB_FAIL(ret)) {
-      } else if (OB_FAIL(prepare_aux_table(fts_doc_word_type,
-                                       fts_doc_word_task_submitted_,
-                                       fts_doc_word_aux_table_id_,
-                                       fts_doc_word_task_id_))) {
+      } else if (OB_FAIL(prepare_aux_table(domain_index_aux_type,
+                                           domain_index_aux_task_submitted_,
+                                           domain_index_aux_table_id_,
+                                           domain_index_aux_task_id_))) {
+      } else if (!is_fts_task()) {
+        fts_doc_word_task_submitted_ = true;
+      } else {
+        // The forward FTS table contains exactly the same logical postings as
+        // the inverted table.  Submit it after the inverted child completes
+        // so its build can read that table and only reorder existing rows.
+        // Keep the initial false value.  If a task is resumed from a message
+        // that already submitted this child, preserve that durable state.
       }
-     }
     }
   }
 
-  if (OB_SUCC(ret) && doc_rowkey_task_submitted_ && domain_index_aux_task_submitted_ && fts_doc_word_task_submitted_) {
+  // For FTS, the DOC_WORD child is intentionally submitted by the first
+  // WAIT_AUX_TABLE_COMPLEMENT pass after the inverted child is complete.
+  if (OB_SUCC(ret) && doc_rowkey_task_submitted_ && domain_index_aux_task_submitted_
+      && (is_fts_task() || fts_doc_word_task_submitted_)) {
     state_finished = true;
   }
   if (state_finished || OB_FAIL(ret)) {
@@ -877,6 +870,31 @@ int ObFtsIndexBuildTask::wait_aux_table_complement()
       // 1. all child tasks finish.
       // 2. the parent task exits if any child task fails.
       state_finished = true;
+    }
+  }
+
+  // FTS_DOC_WORD is a deterministic key-order projection of the inverted
+  // auxiliary table.  Once the first wave has completed, create it from that
+  // table instead of rescanning and reparsing the base table.  The new child
+  // is added to dependent_task_result_map_ by prepare_aux_table(); leave the
+  // parent in WAIT_AUX_TABLE_COMPLEMENT so the normal completion and retry
+  // handling still applies to both sides.
+  if (OB_SUCC(ret) && state_finished && !child_task_failed
+      && ObDDLTaskStatus::WAIT_AUX_TABLE_COMPLEMENT == task_status_
+      && is_fts_task() && !fts_doc_word_task_submitted_) {
+    const ObIndexType fts_doc_word_type = ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL;
+#ifdef ERRSIM
+    if (OB_SUCC(ret)) {
+      ret = OB_E(EventTable::EN_FTS_INDEX_BUILD_DOC_WORD_FAILED) OB_SUCCESS;
+    }
+#endif
+    DEBUG_SYNC(BEFOR_PREPARE_CREATE_TFS_INDEX_DOC_WORD);
+    if (OB_FAIL(prepare_aux_table(fts_doc_word_type,
+                                  fts_doc_word_task_submitted_,
+                                  fts_doc_word_aux_table_id_,
+                                  fts_doc_word_task_id_))) {
+    } else {
+      state_finished = false;
     }
   }
 

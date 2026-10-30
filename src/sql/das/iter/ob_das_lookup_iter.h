@@ -79,6 +79,7 @@ public:
       data_table_iter_(nullptr),
       lookup_rowkey_cnt_(0),
       lookup_row_cnt_(0),
+      accepted_row_cnt_(0),
       state_(INDEX_SCAN),
       index_end_(false),
       default_batch_row_count_(0),
@@ -119,6 +120,10 @@ protected:
   ObDASIter *data_table_iter_;
   int64_t lookup_rowkey_cnt_;
   int64_t lookup_row_cnt_;
+  // Counts rows accepted by the data-table lookup across batches.  The
+  // existing lookup_row_cnt_ is intentionally batch-local and is reset when
+  // a new index batch is collected.
+  int64_t accepted_row_cnt_;
   LookupState state_;
   bool index_end_;
   int64_t default_batch_row_count_;

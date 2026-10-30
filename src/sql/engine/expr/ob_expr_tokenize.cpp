@@ -74,6 +74,7 @@ public:
   void reuse_document()
   {
     if (document_allocator_.total() > (1 << 20)) {
+      helper_.clear_document(true);
       document_allocator_.reset();
     } else {
       document_allocator_.reuse();

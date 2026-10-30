@@ -340,10 +340,10 @@ public:
     return ret;
   }
 
-  void clear_document()
+  void clear_document(const bool release_buffers = false)
   {
     if (nullptr != ik_) { ik_->clear_document(); }
-    if (nullptr != beng_) { beng_->clear_document(); }
+    if (nullptr != beng_) { beng_->clear_document(release_buffers); }
   }
 
 private:
@@ -427,6 +427,13 @@ int ObFTParseHelper::segment(
     }
   }
   return ret;
+}
+
+void ObFTParseHelper::clear_document(const bool release_buffers)
+{
+  if (nullptr != runtime_) {
+    runtime_->clear_document(release_buffers);
+  }
 }
 
 ObFTParseHelper::ObFTParseHelper()

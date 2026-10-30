@@ -1813,7 +1813,14 @@ int ObDASIterUtils::create_domain_lookup_sub_tree(ObTableScanParam &scan_param,
       int64_t batch_row_count = ObDASLookupIterParam::LOCAL_LOOKUP_ITER_DEFAULT_BATCH_ROW_COUNT;
       if (scan_param.table_param_->is_fts_index()) {
         ObEvalCtx *eval_ctx = table_lookup_rtdef->get_lookup_scan_rtdef()->eval_ctx_;
-        batch_row_count = eval_ctx->is_vectorized() ? eval_ctx->max_batch_size_ : 1;
+        // Unscored FTS retrieval does not have a relevance ordering to
+        // preserve.  Keep the scalar lookup batched in that case; the old
+        // single-row setting made COUNT(*) and simple MATCH predicates pay a
+        // full lookup state transition for every document.  Ordered/scored
+        // retrieval retains the conservative one-row behavior.
+        batch_row_count = eval_ctx->is_vectorized()
+            ? eval_ctx->max_batch_size_
+            : (main_lookup_keep_order ? 1 : ObDASLookupIterParam::LOCAL_LOOKUP_ITER_DEFAULT_BATCH_ROW_COUNT);
       }
 
       if (OB_FAIL(create_local_lookup_sub_tree(scan_param, alloc, table_lookup_ctdef->get_rowkey_scan_ctdef(), table_lookup_rtdef->get_rowkey_scan_rtdef(),

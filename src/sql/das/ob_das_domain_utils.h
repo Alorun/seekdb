@@ -55,6 +55,7 @@ public:
 private:
   lib::MemoryContext merge_memctx_;
   ObDomainIndexRow rows_;
+  ObDomainIndexRow row_pool_;
   uint64_t row_idx_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
@@ -186,7 +187,8 @@ public:
                                          const ObDatum &doc_id_datum,
                                          const ObString &fulltext,
                                          const bool is_fts_index_aux,
-                                         ObDomainIndexRow &word_rows);
+                                         ObDomainIndexRow &word_rows,
+                                         ObDomainIndexRow *reusable_rows = nullptr);
   static int generate_multivalue_index_rows(
       ObIAllocator &allocator,
       const ObDASDMLBaseCtDef &das_ctdef,

@@ -336,6 +336,34 @@ int ObDDLTaskUtil::generate_build_replica_sql(const int64_t data_table_id,
   } else if (OB_ISNULL(source_table_schema) || OB_ISNULL(dest_table_schema)) {
     ret = OB_TABLE_NOT_EXIST;
   } else {
+    // An FTS_DOC_WORD table is a key-order projection of the matching
+    // inverted auxiliary table.  When that table is already complete, use it
+    // as the build source.  The source lookup is deliberately best-effort so
+    // recovery, old schemas, and non-FTS callers retain the original path.
+    if (dest_table_schema->is_fts_doc_word_aux()) {
+      static const char FTS_DOC_WORD_SUFFIX[] = "_fts_doc_word";
+      const ObString &dest_name = dest_table_schema->get_table_name_str();
+      const int64_t suffix_len = static_cast<int64_t>(sizeof(FTS_DOC_WORD_SUFFIX) - 1);
+      if (dest_name.length() > suffix_len) {
+        const int64_t source_name_len = dest_name.length() - suffix_len;
+        char source_name_buf[OB_MAX_TABLE_NAME_LENGTH];
+        if (source_name_len < static_cast<int64_t>(sizeof(source_name_buf))) {
+          MEMCPY(source_name_buf, dest_name.ptr(), source_name_len);
+          ObString source_name(source_name_len, source_name_buf);
+          const ObTableSchema *fts_source_schema = nullptr;
+          const int tmp_ret = schema_guard.get_table_schema(source_table_schema->get_database_id(),
+                                                            source_name,
+                                                            true /* is index */,
+                                                            fts_source_schema);
+          if (OB_SUCCESS == tmp_ret && OB_NOT_NULL(fts_source_schema)
+              && fts_source_schema->is_fts_index_aux()
+              && fts_source_schema->can_read_index()
+              && fts_source_schema->get_data_table_id() == data_table_id) {
+            source_table_schema = fts_source_schema;
+          }
+        }
+      }
+    }
     ObArray<ObColDesc> column_ids;
     ObArray<ObColumnNameInfo> column_names;
     ObArray<ObColumnNameInfo> insert_column_names;

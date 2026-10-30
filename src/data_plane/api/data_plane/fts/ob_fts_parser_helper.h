@@ -211,6 +211,10 @@ public:
       const ObFTWordMap &words,
       common::ObIJsonBase *&json_root);
 
+  // Invalidate parser-owned document buffers before the backing arena is
+  // reset.  Normal document reuse keeps those buffers for the next input.
+  void clear_document(const bool release_buffers = false);
+
   void reset();
 
   TO_STRING_KV(KP_(allocator), K_(parser_name), KP_(parser_desc), K_(is_inited));

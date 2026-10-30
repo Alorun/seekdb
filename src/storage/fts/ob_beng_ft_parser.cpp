@@ -123,14 +123,21 @@ int ObBEngFTParser::init(ObFTParserParam *param)
   return ret;
 }
 
-void ObBEngFTParser::clear_document()
+void ObBEngFTParser::clear_document(const bool release_buffer)
 {
   if (nullptr != token_stream_) {
     token_stream_->reuse();
   }
   doc_.reset();
   token_allocator_ = nullptr;
-  ascii_buf_ = nullptr;
+  // Keep the document-scoped ASCII buffer while the arena remains alive.  A
+  // caller that resets that arena passes release_buffer=true so the pointer
+  // cannot outlive its allocation.
+  if (release_buffer) {
+    ascii_buf_ = nullptr;
+    ascii_buf_allocator_ = nullptr;
+    ascii_buf_capacity_ = 0;
+  }
   ascii_token_idx_ = 0;
   ascii_buffer_pos_ = 0;
   ascii_mode_ = false;
@@ -185,7 +192,6 @@ int ObBEngFTParser::segment(
     }
     ascii_token_idx_ = 0;
     ascii_buffer_pos_ = 0;
-    ascii_buf_ = nullptr;
     if (ascii_mode_) {
       static const uint8_t DELIMITER = 1;
       static const uint8_t ALNUM = 2;
@@ -205,10 +211,21 @@ int ObBEngFTParser::segment(
           }
         } else {
           if (token_start < 0 && (ascii_class_[c] & ALNUM) != 0) {
-            if (nullptr == ascii_buf_
-                && OB_ISNULL(ascii_buf_ = static_cast<char *>(token_allocator_->alloc(doc.len_)))) {
-              ret = OB_ALLOCATE_MEMORY_FAILED;
-            } else if (OB_SUCC(ret)) {
+            if (OB_ISNULL(token_allocator_)) {
+              ret = OB_ERR_UNEXPECTED;
+            } else if (ascii_buf_allocator_ != token_allocator_
+                       || ascii_buf_capacity_ < doc.len_
+                       || nullptr == ascii_buf_) {
+              char *new_buf = static_cast<char *>(token_allocator_->alloc(doc.len_));
+              if (OB_ISNULL(new_buf)) {
+                ret = OB_ALLOCATE_MEMORY_FAILED;
+              } else {
+                ascii_buf_ = new_buf;
+                ascii_buf_allocator_ = token_allocator_;
+                ascii_buf_capacity_ = doc.len_;
+              }
+            }
+            if (OB_SUCC(ret)) {
               if (token_count > 0) {
                 ascii_buf_[ascii_buffer_pos_++] = '\0';
               }
@@ -248,6 +265,8 @@ void ObBEngFTParser::reset()
   token_allocator_ = nullptr;
   token_stream_ = nullptr;
   ascii_buf_ = nullptr;
+  ascii_buf_allocator_ = nullptr;
+  ascii_buf_capacity_ = 0;
   ascii_token_idx_ = 0;
   ascii_buffer_pos_ = 0;
   ascii_mode_ = false;

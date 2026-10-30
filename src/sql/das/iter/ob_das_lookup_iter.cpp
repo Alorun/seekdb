@@ -34,9 +34,30 @@ int64_t ObDASLookupIter::get_effective_batch_row_count() const
     const int64_t offset = MAX(lookup_rtdef_->limit_param_.offset_, 0);
     const int64_t limit = lookup_rtdef_->limit_param_.limit_;
     const int64_t target = offset > INT64_MAX - limit ? INT64_MAX : offset + limit;
-    row_count = MIN(row_count, MAX(target, 1));
+    if (target != INT64_MAX) {
+      const int64_t remaining = target > accepted_row_cnt_ ? target - accepted_row_cnt_ : 1;
+      row_count = MIN(row_count, MAX(remaining, 1));
+    }
   }
   return row_count;
+}
+
+namespace
+{
+inline bool fts_lookup_limit_reached(const ObDASScanCtDef *lookup_ctdef,
+                                     const ObDASScanRtDef *lookup_rtdef,
+                                     const int64_t accepted_row_cnt)
+{
+  bool reached = false;
+  if (nullptr != lookup_ctdef && lookup_ctdef->table_param_.is_fts_index()
+      && nullptr != lookup_rtdef && lookup_rtdef->limit_param_.limit_ > 0) {
+    const int64_t offset = MAX(lookup_rtdef->limit_param_.offset_, 0);
+    const int64_t limit = lookup_rtdef->limit_param_.limit_;
+    const int64_t target = offset > INT64_MAX - limit ? INT64_MAX : offset + limit;
+    reached = target != INT64_MAX && accepted_row_cnt >= target;
+  }
+  return reached;
+}
 }
 
 int ObDASLookupIter::inner_init(ObDASIterParam &param)
@@ -51,6 +72,7 @@ int ObDASLookupIter::inner_init(ObDASIterParam &param)
     default_batch_row_count_ = lookup_param.default_batch_row_count_;
     lookup_rowkey_cnt_ = 0;
     lookup_row_cnt_ = 0;
+    accepted_row_cnt_ = 0;
     index_table_iter_ = lookup_param.index_table_iter_;
     data_table_iter_ = lookup_param.data_table_iter_;
     index_ctdef_ = lookup_param.index_ctdef_;
@@ -74,6 +96,7 @@ int ObDASLookupIter::inner_reuse()
   }
   lookup_row_cnt_ = 0;
   lookup_rowkey_cnt_ = 0;
+  accepted_row_cnt_ = 0;
   index_end_ = false;
   state_ = LookupState::INDEX_SCAN;
   return ret;
@@ -116,6 +139,9 @@ int ObDASLookupIter::inner_get_next_row()
       ? MIN(simulate_batch_row_cnt, get_effective_batch_row_count())
       : get_effective_batch_row_count();
   do {
+    if (fts_lookup_limit_reached(lookup_ctdef_, lookup_rtdef_, accepted_row_cnt_)) {
+      state_ = FINISHED;
+    }
     switch (state_) {
       case INDEX_SCAN: {
         reset_lookup_state();
@@ -165,6 +191,10 @@ int ObDASLookupIter::inner_get_next_row()
         } else {
           got_next_row = true;
           ++lookup_row_cnt_;
+          ++accepted_row_cnt_;
+          if (fts_lookup_limit_reached(lookup_ctdef_, lookup_rtdef_, accepted_row_cnt_)) {
+            state_ = FINISHED;
+          }
         }
         break;
       }
@@ -193,6 +223,9 @@ int ObDASLookupIter::inner_get_next_rows(int64_t &count, int64_t capacity)
       ? MIN(simulate_batch_row_cnt, get_effective_batch_row_count())
       : get_effective_batch_row_count();
   do {
+    if (fts_lookup_limit_reached(lookup_ctdef_, lookup_rtdef_, accepted_row_cnt_)) {
+      state_ = FINISHED;
+    }
     switch (state_) {
       case INDEX_SCAN: {
         reset_lookup_state();
@@ -245,6 +278,10 @@ int ObDASLookupIter::inner_get_next_rows(int64_t &count, int64_t capacity)
             ret = OB_SUCCESS;
             if (count > 0) {
               lookup_row_cnt_ += count;
+              accepted_row_cnt_ += count;
+              if (fts_lookup_limit_reached(lookup_ctdef_, lookup_rtdef_, accepted_row_cnt_)) {
+                state_ = FINISHED;
+              }
               get_next_rows = true;
             } else {
               if (OB_FAIL(check_index_lookup())) {
@@ -256,6 +293,10 @@ int ObDASLookupIter::inner_get_next_rows(int64_t &count, int64_t capacity)
           }
         } else {
           lookup_row_cnt_ += count;
+          accepted_row_cnt_ += count;
+          if (fts_lookup_limit_reached(lookup_ctdef_, lookup_rtdef_, accepted_row_cnt_)) {
+            state_ = FINISHED;
+          }
           get_next_rows = true;
         }
         break;

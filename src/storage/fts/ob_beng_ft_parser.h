@@ -41,6 +41,8 @@ public:
       doc_(),
       token_stream_(nullptr),
       ascii_buf_(nullptr),
+      ascii_buf_allocator_(nullptr),
+      ascii_buf_capacity_(0),
       ascii_token_idx_(0),
       ascii_buffer_pos_(0),
       ascii_mode_(false),
@@ -54,7 +56,7 @@ public:
 
   int init(ObFTParserParam *param);
   int reuse(ObFTParserParam *param);
-  void clear_document();
+  void clear_document(const bool release_buffer = false);
   void reset();
   virtual int get_next_token(
       const char *&word,
@@ -77,6 +79,8 @@ private:
   common::ObDatum doc_;
   share::ObITokenStream *token_stream_;
   char *ascii_buf_;
+  common::ObIAllocator *ascii_buf_allocator_;
+  int64_t ascii_buf_capacity_;
   int64_t ascii_token_idx_;
   int64_t ascii_buffer_pos_;
   bool ascii_mode_;
