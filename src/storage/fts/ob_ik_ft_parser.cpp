@@ -76,6 +76,7 @@ void ObIKFTParser::clear_document()
   for (int64_t i = 0; i < segmenter_count_; ++i) {
     segmenters_[i]->clear_document();
   }
+  arbitrator_.reuse();
   // A single unusually large document must not enlarge the retained working set.
   if (&document_memory_ == &document_allocator_) {
     if (document_allocator_.total() > (1 << 20)) {
@@ -182,6 +183,7 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
 int ObIKFTParser::process_next_batch()
 {
   int ret = OB_SUCCESS;
+  const int64_t start_offset = ctx_->get_cursor();
   ctx_->reset_resource();
 
   // handle next segmenter
@@ -212,9 +214,8 @@ int ObIKFTParser::process_next_batch()
     }
 
     if (OB_SUCC(ret) || OB_ITER_END == ret) {
-      ObIKArbitrator arb;
-      if (OB_FAIL(arb.process(*ctx_))) {
-      } else if (OB_FAIL(arb.output_result(*ctx_))) {
+      if (OB_FAIL(arbitrator_.process(*ctx_))) {
+      } else if (OB_FAIL(arbitrator_.output_result(*ctx_, start_offset))) {
       }
     } else {
       // Already logged.

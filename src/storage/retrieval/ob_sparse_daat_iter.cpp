@@ -349,14 +349,16 @@ int ObSRDaaTIterImpl::process_collected_row(const ObDatum &id_datum, const doubl
 int ObSRDaaTIterImpl::filter_on_demand(const int64_t count, const double relevance, bool &need_project)
 {
   int ret = OB_SUCCESS;
+  if (!iter_param_->need_filter()) {
+    need_project = true;
+    return ret;
+  }
   ObExpr *filter_expr = iter_param_->filter_expr_;
   ObExpr *relevance_proj_expr = iter_param_->relevance_proj_expr_;
   ObEvalCtx *eval_ctx = iter_param_->eval_ctx_;
   ObEvalCtx::BatchInfoScopeGuard guard(*eval_ctx);
 
-  if (!iter_param_->need_filter()) {
-    need_project = true;
-  } else if (eval_ctx->is_vectorized()) {
+  if (eval_ctx->is_vectorized()) {
     if (OB_UNLIKELY(count >= eval_ctx->max_batch_size_)) {
       ret = OB_ERR_UNEXPECTED;
     } else {

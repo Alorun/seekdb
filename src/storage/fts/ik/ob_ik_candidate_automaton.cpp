@@ -66,6 +66,7 @@ IKCandidateAutomaton::IKCandidateAutomaton()
     allocator_(lib::ObMemAttr("IKCandidateAC")),
     states_(nullptr),
     edges_(nullptr),
+    root_transitions_(nullptr),
     state_count_(0),
     edge_count_(0)
 {}
@@ -82,6 +83,7 @@ int IKCandidateAutomaton::build_if_needed(
       allocator_.reset();
       states_ = nullptr;
       edges_ = nullptr;
+      root_transitions_ = nullptr;
       state_count_ = 0;
       edge_count_ = 0;
       status_.store(DISABLED, std::memory_order_release);
@@ -316,6 +318,22 @@ int IKCandidateAutomaton::build_(
       edges_ = edges;
       state_count_ = next_state;
       edge_count_ = next_edge;
+      const int64_t root_bytes = ROOT_TRANSITION_COUNT * sizeof(uint32_t);
+      const int64_t peak_bytes = workspace_size + next_state * sizeof(State)
+                                 + next_edge * sizeof(Edge);
+      if (root_bytes <= memory_budget - peak_bytes) {
+        // This optional cache must not disable the sparse automaton on OOM.
+        root_transitions_ = static_cast<uint32_t *>(allocator_.alloc(root_bytes));
+        if (nullptr != root_transitions_) {
+          MEMSET(root_transitions_, 0, root_bytes);
+          const State &root = states_[0];
+          for (uint32_t i = root.edge_begin_; i < root.edge_begin_ + root.edge_count_; ++i) {
+            if (edges_[i].symbol_ < ROOT_TRANSITION_COUNT) {
+              root_transitions_[edges_[i].symbol_] = edges_[i].target_;
+            }
+          }
+        }
+      }
     }
   }
   LOG_INFO("build IK candidate automaton", K(ret), K(dict.array_size_), K(total_char_count),
@@ -397,14 +415,29 @@ int IKCandidateAutomaton::advance_ready_(uint32_t &state,
   if (OB_ISNULL(ch) || char_len <= 0 || char_len > 4 || state >= state_count_) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    const uint32_t symbol = pack_symbol_(ch, char_len);
+    ret = advance_ready_(state, pack_symbol_(ch, char_len));
+  }
+  return ret;
+}
+
+int IKCandidateAutomaton::advance_ready_(uint32_t &state, const uint32_t symbol) const
+{
+  int ret = OB_SUCCESS;
+  if (state >= state_count_) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
     uint32_t target = 0;
-    bool found = find_transition_(states_, edges_, state, symbol, target);
-    while (!found && 0 != state) {
+    while (0 != state && !find_transition_(states_, edges_, state, symbol, target)) {
       state = states_[state].fail_state_;
-      found = find_transition_(states_, edges_, state, symbol, target);
     }
-    state = found ? target : 0;
+    if (0 == state) {
+      if (nullptr != root_transitions_ && symbol < ROOT_TRANSITION_COUNT) {
+        target = root_transitions_[symbol];
+      } else {
+        find_transition_(states_, edges_, 0, symbol, target);
+      }
+    }
+    state = target;
   }
   return ret;
 }

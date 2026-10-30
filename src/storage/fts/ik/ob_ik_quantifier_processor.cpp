@@ -55,6 +55,9 @@ int ObIKQuantifierProcessor::process_CN_number(TokenizeContext &ctx,
     is_cn_number = ObUnicodeBlockUtils::is_unicode_cn_number(ctx.current_unicode());
   } else if (ObFTCharUtil::CharType::CHINESE == type
              && OB_FAIL(ObFTCharUtil::check_cn_number(ctx.collation(), ch, char_len, is_cn_number))) {
+  }
+  // Classification must not skip the number-run state machine on UTF-8.
+  if (OB_FAIL(ret)) {
   } else if (start_ == -1 && end_ == -1) {
     if (is_cn_number) {
       start_ = ctx.get_cursor();

@@ -16,6 +16,12 @@ smart_ambiguous
 SELECT tokenize('研究生命起源生命科学北京天安门', 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"max_word"}]}]') AS max_word_ambiguous;
 max_word_ambiguous
 {"tokens": [{"天安门": 1}, {"研究生": 1}, {"门": 1}, {"研究": 1}, {"起源": 1}, {"北京": 1}, {"生命科学": 1}, {"天安": 1}, {"生命": 2}, {"科学": 1}], "doc_len": 11}
+SELECT JSON_UNQUOTE(JSON_EXTRACT(tokenize(REPEAT('人民大会堂 ', 250), 'ik', '[{"output":"all"},{"additional_args":[{"ik_mode":"smart"}]}]'), '$.doc_len')) AS smart_long_doc_len;
+smart_long_doc_len
+250
+SELECT JSON_UNQUOTE(JSON_EXTRACT(tokenize('一二三', 'ik', '[{"output":"all"}]'), '$.doc_len')) AS chinese_number_doc_len;
+chinese_number_doc_len
+1
 CREATE TABLE docs_smart (
   id INT PRIMARY KEY,
   body TEXT,

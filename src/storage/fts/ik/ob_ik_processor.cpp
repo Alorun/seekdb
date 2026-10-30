@@ -172,7 +172,7 @@ int TokenizeContext::get_next_token(const char *&word,
 {
   int ret = OB_SUCCESS;
   if (!result_list_.empty()) {
-    ObIKToken &token = result_list_.get_first();
+    ObIKToken token = result_list_.get_first();
     result_list_.pop_front();
     if (!result_list_.empty()) {
       if (OB_FAIL(compound(token))) {
@@ -226,7 +226,7 @@ int TokenizeContext::compound(ObIKToken &token)
         }
       }
       // There may be another round of append
-      if (OB_SUCC(ret)) {
+      if (OB_SUCC(ret) && !list.empty()) {
         ObIKToken next = list.get_first();
         bool append = false;
         if (ObIKTokenType::IK_COUNT_TOKEN == next.type_) {

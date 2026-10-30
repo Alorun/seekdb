@@ -39,7 +39,7 @@ int ObIKCJKProcessor::do_process(TokenizeContext &ctx,
   if (nullptr != automaton_) {
     if (ObFTCharUtil::CharType::USELESS == type) {
       automaton_state_ = 0;
-    } else if (OB_FAIL(automaton_->advance_ready_(automaton_state_, ch, char_len))) {
+    } else if (OB_FAIL(automaton_->advance_ready_(automaton_state_, ctx.current_unicode()))) {
       automaton_state_ = 0;
     } else {
       const int64_t end_pos = ctx.get_cursor() + char_len;

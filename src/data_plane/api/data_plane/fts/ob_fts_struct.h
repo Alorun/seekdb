@@ -52,8 +52,13 @@ private:
 };
 
 // A word map is owned by one parser invocation and is never accessed concurrently.
+using FTWordMapNode = common::hash::HashMapTypes<ObFTWord, int64_t>::AllocType;
+using FTWordMapAllocator = common::hash::SimpleAllocer<
+    FTWordMapNode, common::hash::NodeNumTraits<FTWordMapNode>::NODE_NUM,
+    common::hash::NoPthreadDefendMode>;
 typedef common::hash::ObHashMap<ObFTWord, int64_t,
-                                common::hash::NoPthreadDefendMode> ObFTWordMap;
+    common::hash::NoPthreadDefendMode, common::hash::hash_func<ObFTWord>,
+    common::hash::equal_to<ObFTWord>, FTWordMapAllocator> ObFTWordMap;
 
 class ObAddWordFlag final
 {

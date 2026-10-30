@@ -39,7 +39,9 @@ int ObIKArbitrator::process(TokenizeContext &ctx)
   ObList<ObIKToken, ObIAllocator> &tokens = ctx.token_list().tokens();
   ObIKTokenChain *chain_need_arbitrate = nullptr;
   bool use_smart = ctx.is_smart();
-  if (OB_FAIL(prepare(ctx))) {
+  reuse();
+  if (tokens.empty()) {
+    // Single-character fallback is handled by output_result().
   } else if (OB_ISNULL(chain_need_arbitrate = OB_NEWx(ObIKTokenChain, &alloc_, alloc_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
     LOG_WARN("alloc memory failed");
@@ -96,6 +98,7 @@ int ObIKArbitrator::process(TokenizeContext &ctx)
     } else if (OB_FAIL(add_chain(judge_result))) {
       OB_DELETEx(ObIKTokenChain, &alloc_, judge_result);
     } else {
+      OB_DELETEx(ObIKTokenChain, &alloc_, chain_need_arbitrate);
     }
   }
 
@@ -107,14 +110,17 @@ int ObIKArbitrator::process(TokenizeContext &ctx)
   return ret;
 }
 
-int ObIKArbitrator::output_result(TokenizeContext &ctx)
+int ObIKArbitrator::output_result(TokenizeContext &ctx, const int64_t start_offset)
 {
   int ret = OB_SUCCESS;
 
   int64_t char_len = 0;
+  int64_t chain_idx = 0;
   ObIKTokenChain *chain = nullptr;
   const bool is_utf8mb4 = CHARSET_UTF8MB4 == ObCharset::charset_type_by_coll(ctx.collation());
-  for (int64_t current = 0; OB_SUCC(ret) && current < ctx.fulltext_len();) {
+  // Only this batch has been arbitrated. Revisiting other batches would emit
+  // their CJK characters as singles and repeatedly scan the whole document.
+  for (int64_t current = start_offset; OB_SUCC(ret) && current < ctx.get_cursor();) {
     ObFTCharUtil::CharType type;
     // maybe not so good to keep single, check it later
     if (is_utf8mb4) {
@@ -135,9 +141,7 @@ int ObIKArbitrator::output_result(TokenizeContext &ctx)
     if (OB_FAIL(ret)) {
     } else if (ObFTCharUtil::CharType::USELESS == type) {
       current += char_len; // skip useless char
-    } else if (OB_FAIL(chains_.get_refactored(current, chain)) && OB_HASH_NOT_EXIST != ret) {
-    } else if (OB_HASH_NOT_EXIST == ret) {
-      ret = OB_SUCCESS;
+    } else if (chain_idx >= chains_.count() || chains_.at(chain_idx)->min_offset() != current) {
       if (!keep_single()) {
         // skip single word
       } else {
@@ -166,6 +170,7 @@ int ObIKArbitrator::output_result(TokenizeContext &ctx)
       }
       current += char_len;
     } else {
+      chain = chains_.at(chain_idx++);
       for (ObList<ObIKToken, ObIAllocator>::const_iterator iter = chain->list().tokens().begin();
            OB_SUCC(ret) && iter != chain->list().tokens().end();
            iter++) {
@@ -307,15 +312,23 @@ int ObIKArbitrator::remove_conflict(const ObIKToken &token, ObIKTokenChain *opti
   return ret;
 }
 
-int ObIKArbitrator::prepare(TokenizeContext &ctx)
+void ObIKArbitrator::reuse()
 {
-  int ret = OB_SUCCESS;
-
-  int cal_bucket_num = MAX(ctx.fulltext_len() / 100, 10);
-  cal_bucket_num = MIN(cal_bucket_num, 100);
-  if (OB_FAIL(chains_.create(cal_bucket_num, ObMemAttr("IK ARBITRATE")))) {
+  for (int64_t i = 0; i < chains_.count(); ++i) {
+    ObIKTokenChain *chain = chains_.at(i);
+    OB_DELETEx(ObIKTokenChain, &alloc_, chain);
+    chains_.at(i) = nullptr;
   }
-  return ret;
+  if (chains_.count() > 4096) {
+    chains_.reset();
+  } else {
+    chains_.reuse();
+  }
+  if (alloc_.total() > (1 << 20)) {
+    alloc_.reset();
+  } else {
+    alloc_.reuse();
+  }
 }
 
 ObIKArbitrator::ObIKArbitrator() : alloc_(lib::ObMemAttr("IK Arbitrator")) {}
@@ -327,14 +340,18 @@ int ObIKArbitrator::add_chain(ObIKTokenChain *chain)
     ret = OB_INVALID_ARGUMENT;
   } else if (chain->list().is_empty()) {
     // no need to add empty chain
-  } else if (OB_FAIL(chains_.set_refactored(chain->min_offset(), chain))) {
+  } else if (!chains_.empty()
+             && chains_.at(chains_.count() - 1)->max_offset() > chain->min_offset()) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(chains_.push_back(chain))) {
   }
   return ret;
 }
 
 ObIKArbitrator::~ObIKArbitrator()
 {
-  chains_.destroy();
+  reuse();
+  chains_.reset();
   alloc_.reset();
 }
 } // namespace storage

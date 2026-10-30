@@ -58,6 +58,7 @@ private:
   IKCandidateAutomaton();
   int build_(const ObIKDictLoader::RawDict &dict, const int64_t memory_budget);
   int advance_ready_(uint32_t &state, const char *ch, const uint8_t char_len) const;
+  int advance_ready_(uint32_t &state, const uint32_t symbol) const;
   uint32_t first_output_state_ready_(const uint32_t state) const;
   uint32_t next_output_state_ready_(const uint32_t state) const;
   uint32_t byte_length_ready_(const uint32_t state) const;
@@ -75,6 +76,9 @@ private:
   common::ObArenaAllocator allocator_;
   State *states_;
   Edge *edges_;
+  // Only the root has a large fanout. Keep other states sparse.
+  static constexpr uint32_t ROOT_TRANSITION_COUNT = 0x10000;
+  uint32_t *root_transitions_;
   uint32_t state_count_;
   uint32_t edge_count_;
 };
