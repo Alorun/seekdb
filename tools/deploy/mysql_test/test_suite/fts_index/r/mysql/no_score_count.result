@@ -30,6 +30,15 @@ SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
 WHERE MATCH(body) AGAINST('database performance');
 GROUP_CONCAT(id ORDER BY id)
 1,2,3
+SELECT id FROM docs
+WHERE MATCH(body) AGAINST('database performance') ORDER BY id LIMIT 2;
+id
+1
+2
+SELECT id FROM docs
+WHERE MATCH(body) AGAINST('database performance') ORDER BY id LIMIT 1, 1;
+id
+2
 SELECT COUNT(*) FROM docs
 WHERE MATCH(body) AGAINST('database performance') > 0.1;
 COUNT(*)

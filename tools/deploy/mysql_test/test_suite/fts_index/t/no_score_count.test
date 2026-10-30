@@ -1,5 +1,5 @@
-# COUNT(*) may use the unscored full-text retrieval path. Other uses of MATCH
-# continue to require a relevance score or a table lookup.
+# Queries that only test MATCH membership can skip relevance scoring; expressions
+# that consume MATCH scores and Boolean mode must retain their original behavior.
 --disable_warnings
 DROP DATABASE IF EXISTS fts_no_score_count;
 --enable_warnings
@@ -23,6 +23,10 @@ SELECT COUNT(*) FROM docs
   WHERE MATCH(body) AGAINST('database performance') AND id >= 2;
 SELECT GROUP_CONCAT(id ORDER BY id) FROM docs
   WHERE MATCH(body) AGAINST('database performance');
+SELECT id FROM docs
+  WHERE MATCH(body) AGAINST('database performance') ORDER BY id LIMIT 2;
+SELECT id FROM docs
+  WHERE MATCH(body) AGAINST('database performance') ORDER BY id LIMIT 1, 1;
 SELECT COUNT(*) FROM docs
   WHERE MATCH(body) AGAINST('database performance') > 0.1;
 SELECT id, MATCH(body) AGAINST('database performance') AS score
