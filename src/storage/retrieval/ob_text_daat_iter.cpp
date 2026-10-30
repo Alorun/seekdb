@@ -25,13 +25,11 @@ namespace storage
 int ObTextDaaTIter::init(const ObTextDaaTParam &param)
 {
   int ret = OB_SUCCESS;
-  if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
+  if (IS_INIT) {
+    ret = OB_INIT_TWICE;
+  } else if (OB_ISNULL(param.base_param_) || OB_ISNULL(param.dim_iters_) || OB_ISNULL(param.allocator_)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
-                                            *param.allocator_, *param.relevance_collector_))) {
-  } else if (param.base_param_->relevance_expr_ != nullptr
-             && OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   } else {
     mode_flag_ = param.mode_flag_;
     function_lookup_mode_ = param.function_lookup_mode_;
@@ -40,11 +38,16 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
     // Keep Boolean evaluation, scoring, and function lookup on the general path.
     unscored_union_ = mode_flag_ == sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE
         && !function_lookup_mode_ && dim_iters_->count() > 0 && dim_iters_->count() <= 8
-        && nullptr == iter_param_->relevance_expr_
-        && !iter_param_->need_project_relevance() && !iter_param_->need_filter()
-        && !iter_param_->need_pushdown_topk();
-    if (unscored_union_) {
-      const sql::ObDatumMeta &meta = iter_param_->id_proj_expr_->datum_meta_;
+        && nullptr == param.base_param_->relevance_expr_
+        && !param.base_param_->need_project_relevance() && !param.base_param_->need_filter()
+        && !param.base_param_->need_pushdown_topk();
+    if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
+                                       *param.allocator_, *param.relevance_collector_,
+                                       !unscored_union_))) {
+    } else if (nullptr != param.base_param_->relevance_expr_
+               && OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
+    } else if (unscored_union_) {
+      const sql::ObDatumMeta &meta = param.base_param_->id_proj_expr_->datum_meta_;
       common::ObDatumBasicFuncs *basic_funcs = ObDatumFuncs::get_basic_func(meta.type_, meta.cs_type_);
       if (OB_ISNULL(basic_funcs) || OB_ISNULL(basic_funcs->null_first_cmp_)) {
         ret = OB_ERR_UNEXPECTED;

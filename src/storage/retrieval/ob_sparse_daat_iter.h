@@ -76,7 +76,8 @@ public:
       ObSparseRetrievalMergeParam &iter_param,
       ObIArray<ObISRDaaTDimIter *> &dim_iters,
       ObIAllocator &iter_allocator,
-      ObSRDaaTRelevanceCollector &relevance_collector);
+      ObSRDaaTRelevanceCollector &relevance_collector,
+      bool need_merge_heap = true);
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
   virtual int get_query_max_score(double &score) override;

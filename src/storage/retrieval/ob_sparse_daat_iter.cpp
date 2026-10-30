@@ -90,7 +90,8 @@ int ObSRDaaTIterImpl::init(
     ObSparseRetrievalMergeParam &iter_param,
     ObIArray<ObISRDaaTDimIter *> &dim_iters,
     ObIAllocator &iter_allocator,
-    ObSRDaaTRelevanceCollector &relevance_collector)
+    ObSRDaaTRelevanceCollector &relevance_collector,
+    const bool need_merge_heap)
 {
   int ret = OB_SUCCESS;
   if (IS_INIT) {
@@ -120,11 +121,15 @@ int ObSRDaaTIterImpl::init(
     } else if (FALSE_IT(buffered_domain_ids_.set_allocator(iter_allocator_))) {
     } else if (OB_FAIL(buffered_domain_ids_.init(max_batch_size))) {
     } else if (OB_FAIL(buffered_domain_ids_.prepare_allocate(max_batch_size))) {
-    } else if (FALSE_IT(buffered_relevances_.set_allocator(iter_allocator_))) {
-    } else if (OB_FAIL(buffered_relevances_.init(max_batch_size))) {
-    } else if (OB_FAIL(buffered_relevances_.prepare_allocate(max_batch_size))) {
-    } else if (OB_FAIL(merge_cmp_.init(iter_param_->id_proj_expr_->datum_meta_, &iter_domain_ids_))) {
-    } else if (OB_FAIL(init_merge_heap(dim_iters_->count()))) {
+    } else if (iter_param_->need_buffer_relevance()
+               && FALSE_IT(buffered_relevances_.set_allocator(iter_allocator_))) {
+    } else if (iter_param_->need_buffer_relevance()
+               && OB_FAIL(buffered_relevances_.init(max_batch_size))) {
+    } else if (iter_param_->need_buffer_relevance()
+               && OB_FAIL(buffered_relevances_.prepare_allocate(max_batch_size))) {
+    } else if (need_merge_heap
+               && OB_FAIL(merge_cmp_.init(iter_param_->id_proj_expr_->datum_meta_, &iter_domain_ids_))) {
+    } else if (need_merge_heap && OB_FAIL(init_merge_heap(dim_iters_->count()))) {
     } else {
       for (int64_t i = 0; i < dim_iters.count(); ++i) {
         next_round_iter_idxes_[i] = i;
@@ -388,17 +393,21 @@ int ObSRDaaTIterImpl::cache_result(int64_t &count, const ObDatum &id_datum, cons
 {
   int ret = OB_SUCCESS;
   const common::ObLimitParam *limit_param= iter_param_->limit_param_;
+  const bool need_buffer_relevance = iter_param_->need_buffer_relevance();
   const int64_t limit = limit_param->limit_;
   const int64_t offset = limit_param->offset_;
   ++input_row_cnt_;
   if (limit_param->is_valid() && input_row_cnt_ <= offset) {
     // TODO: Maybe we should not process offset logic here
     // don't need to project
-  } else if (OB_UNLIKELY(count >= buffered_domain_ids_.count() || count >= buffered_relevances_.count())) {
+  } else if (OB_UNLIKELY(count >= buffered_domain_ids_.count()
+                         || (need_buffer_relevance && count >= buffered_relevances_.count()))) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     buffered_domain_ids_[count].from_datum(id_datum);
-    buffered_relevances_[count] = relevance;
+    if (need_buffer_relevance) {
+      buffered_relevances_[count] = relevance;
+    }
     ++count;
     ++output_row_cnt_;
     if (limit_param->is_valid() && output_row_cnt_ >= limit) {
